@@ -1,0 +1,49 @@
+@page "/aps/recette"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Domain.Aps.Contracts
+@inject ApsRecipeService Recipe
+
+<PageTitle>APS Recette</PageTitle>
+<h2>APS — Critère de recette faits × attendus</h2>
+<p class="hint">M2/M6 verrouillés tant que recette ≠ PASSED.</p>
+@if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+@if (_msg is not null) { <div class="alert alert-success">@_msg</div> }
+<section class="card">
+    <button class="btn-secondary" @onclick="() => EvalAsync(false,false)">Sans historique</button>
+    <button class="btn-primary" @onclick="() => EvalAsync(true,true)">Évaluer avec matches demo</button>
+    <button class="btn-secondary" @onclick="CheckLockAsync">Tester verrou M2/M6</button>
+</section>
+@if (_last is not null)
+{
+    <section class="card">
+        <p>Statut <strong>@_last.Status</strong> — score @(_last.GlobalScore?.ToString("F2") ?? "—") — Unlock M2/M6: @_last.UnlockM2M6</p>
+        <ul>@foreach (var c in _last.DominantCauses) { <li>@c</li> }</ul>
+    </section>
+}
+<section class="card">
+    <h3>Historique</h3>
+    <table>
+        <thead><tr><th>Id</th><th>Statut</th><th>Score</th><th>Unlock</th><th>Quand</th></tr></thead>
+        <tbody>
+        @foreach (var r in _hist)
+        {
+            <tr><td>@r.Id</td><td>@r.Status</td><td>@(r.GlobalScore?.ToString("F2")??"—")</td><td>@r.UnlockM2M6</td><td>@r.CreatedAtUtc</td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+@code {
+    private ApsReplayValidationResult? _last;
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsReplayDto> _hist = [];
+    private string? _error; private string? _msg;
+    protected override async Task OnInitializedAsync() { await Recipe.EnsureReadyAsync(); _hist = (await Recipe.ListAsync()).ToList(); }
+    private async Task EvalAsync(bool prior, bool matches) {
+        _error=null; _last = await Recipe.EvaluateAsync(prior, matches); _hist = (await Recipe.ListAsync()).ToList();
+        _msg = $"Recette {_last.Status}";
+    }
+    private async Task CheckLockAsync() {
+        try { await Recipe.AssertM2M6LockedAsync(); _msg = "M2/M6 déverrouillés."; }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+}

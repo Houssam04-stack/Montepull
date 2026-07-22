@@ -1,0 +1,26 @@
+@page "/aps/nervosite"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@inject ApsRecipeService Recipe
+
+<PageTitle>APS Nervosité</PageTitle>
+<h2>APS — Nervosité</h2>
+<p class="hint">Baseline et historique période à période. Calculé aussi en fin de cycle nocturne.</p>
+<section class="card">
+    <table>
+        <thead><tr><th>Période</th><th>Composite</th><th>Détail</th></tr></thead>
+        <tbody>
+        @foreach (var n in _list)
+        {
+            <tr><td>@n.PeriodFrom→@n.PeriodTo</td><td>@n.CompositeIndex.ToString("F3")</td><td><small>@n.MetricsJson</small></td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+@code {
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsNervousnessDto> _list = [];
+    protected override async Task OnInitializedAsync() {
+        await Recipe.EnsureReadyAsync();
+        _list = (await Recipe.ListNervousnessAsync()).ToList();
+    }
+}

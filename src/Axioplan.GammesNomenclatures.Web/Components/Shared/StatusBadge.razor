@@ -1,0 +1,8 @@
+<span class="status-badge @ModuleStatusLabels.CssClass(Status) @(Experimental ? "status-experimental-flag" : null)">
+    @(Experimental ? "Expérimental — " : "")@ModuleStatusLabels.Label(Status)
+</span>
+
+@code {
+    [Parameter, EditorRequired] public ModuleStatusKind Status { get; set; }
+    [Parameter] public bool Experimental { get; set; }
+}

@@ -1,0 +1,71 @@
+<div class="tag-multi-select">
+    <label class="group-label">@Label</label>
+
+    <div class="tag-list" aria-live="polite">
+        @if (SelectedCodes.Count == 0)
+        {
+            <span class="hint">Aucune selection</span>
+        }
+        else
+        {
+            @foreach (var code in SelectedCodes.OrderBy(c => c))
+            {
+                var option = Options.FirstOrDefault(o => o.Code == code);
+                <span class="tag-badge">
+                    @(option?.Label ?? code)
+                    <button type="button" class="tag-remove" title="Retirer" @onclick="() => RemoveAsync(code)">×</button>
+                </span>
+            }
+        }
+    </div>
+
+    <div class="tag-add-row">
+        <select class="form-control" @bind="_pendingCode">
+            <option value="">— Ajouter —</option>
+            @foreach (var option in AvailableOptions)
+            {
+                <option value="@option.Code">@option.Label</option>
+            }
+        </select>
+        <button type="button" class="btn-secondary btn-sm" disabled="@string.IsNullOrWhiteSpace(_pendingCode)" @onclick="AddPendingAsync">
+            Ajouter
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = string.Empty;
+
+    [Parameter] public IReadOnlyList<AttributeOptionListItem> Options { get; set; } = [];
+
+    [Parameter] public HashSet<string> SelectedCodes { get; set; } = [];
+
+    [Parameter] public EventCallback<HashSet<string>> SelectedCodesChanged { get; set; }
+
+    private string _pendingCode = string.Empty;
+
+    private IEnumerable<AttributeOptionListItem> AvailableOptions =>
+        Options.Where(o => !SelectedCodes.Contains(o.Code));
+
+    private async Task AddPendingAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_pendingCode) || SelectedCodes.Contains(_pendingCode))
+        {
+            return;
+        }
+
+        SelectedCodes.Add(_pendingCode);
+        _pendingCode = string.Empty;
+        await SelectedCodesChanged.InvokeAsync(SelectedCodes);
+    }
+
+    private async Task RemoveAsync(string code)
+    {
+        if (!SelectedCodes.Remove(code))
+        {
+            return;
+        }
+
+        await SelectedCodesChanged.InvokeAsync(SelectedCodes);
+    }
+}

@@ -1,0 +1,148 @@
+@page "/aps/cbn"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Compiler
+@using Axioplan.GammesNomenclatures.Domain.Aps.SegmentCbn
+@inject ApsSegmentCbnService SegmentCbnService
+
+<PageTitle>APS CBN segments</PageTitle>
+
+<h2>APS — CBN par segments</h2>
+<p class="hint">Moteur distinct du CBN legacy (<code>/cbn</code>). Artefact VALID requis. ATP fil = MAX bains.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Article fini</label>
+            <input class="form-control" @bind="_article" />
+        </div>
+        <div>
+            <label>Segment</label>
+            <select class="form-control" @bind="_segment">
+                <option value="@ApsSegments.C">@ApsSegments.C — PF</option>
+                <option value="@ApsSegments.B">@ApsSegments.B — pieces</option>
+                <option value="@ApsSegments.A">@ApsSegments.A — fil</option>
+            </select>
+        </div>
+        <div>
+            <label>Chaine circuits</label>
+            <input class="form-control" @bind="_chain" />
+        </div>
+        <div>
+            <label>Quantite</label>
+            <input type="number" class="form-control" @bind="_qty" />
+        </div>
+        <div>
+            <label>Compat bain client</label>
+            <select class="form-control" @bind="_compat">
+                <option value="@ApsBathCompatRules.Piece">PIECE</option>
+                <option value="@ApsBathCompatRules.Garment">VETEMENT</option>
+                <option value="@ApsBathCompatRules.CustomerLot">LOT_CLIENT</option>
+            </select>
+        </div>
+        <div>
+            <label><input type="checkbox" @bind="_mts" /> Recompletement MTS</label>
+        </div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="RunAsync" disabled="@_busy">Lancer CBN APS</button>
+        </div>
+    </div>
+</section>
+
+@if (_dto is not null)
+{
+    <section class="card">
+        <h3>Resultat — @(_dto.Result.Success ? "OK" : "ECHEC")</h3>
+        <p>Artefact : <strong>@_dto.ArtifactStatus</strong> —
+           hash <code>@(_dto.ArtifactHash is { Length: > 12 } h ? h[..12] + "…" : _dto.ArtifactHash)</code></p>
+        @if (!_dto.Result.Success)
+        {
+            <div class="alert alert-warning">@_dto.Result.Error</div>
+        }
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Article</th><th>Brut</th><th>Dispo</th><th>Net</th><th>Lancer</th><th>Bain</th><th>Chemin</th><th>Bloque</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var line in _dto.Result.Lines)
+            {
+                <tr>
+                    <td>@line.ArticleCode</td>
+                    <td>@line.GrossNeed.ToString("F4")</td>
+                    <td>@line.Available.ToString("F4")</td>
+                    <td>@line.NetNeed.ToString("F4")</td>
+                    <td>@line.QtyToLaunch.ToString("F4")</td>
+                    <td>@(line.SelectedBath ?? "—")</td>
+                    <td>@line.SourcePath</td>
+                    <td>@(line.Blocked ? line.BlockReason : "non")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+
+        @foreach (var line in _dto.Result.Lines)
+        {
+            <h4>Traces @line.ArticleCode</h4>
+            <ul>
+                @foreach (var t in line.Traces)
+                {
+                    <li>@t</li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    private string _article = "DEMO_PF";
+    private string _segment = ApsSegments.A;
+    private string _chain = "CIR_TRICOT_INT";
+    private double _qty = 100;
+    private string _compat = ApsBathCompatRules.Piece;
+    private bool _mts;
+    private ApsSegmentCbnRunDto? _dto;
+    private string? _error;
+    private bool _busy;
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _chain = _segment switch
+            {
+                ApsSegments.A => "CIR_TRICOT_INT",
+                ApsSegments.B => "CIR_REMAIL_INT",
+                _ => "CIR_EXPED"
+            };
+            _dto = await SegmentCbnService.RunAsync(new ApsSegmentCbnRunRequest(
+                "DEM-" + DateTime.UtcNow.ToString("HHmmss"),
+                _article,
+                _qty,
+                DateOnly.FromDateTime(DateTime.Today.AddDays(14)),
+                _segment,
+                _chain,
+                _compat,
+                _mts,
+                OrderAggregateId: "CMD-DEMO"));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -1,0 +1,834 @@
+@page "/parametres"
+@page "/parametres/{Tab}"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Domain
+@inject ParameterService ParameterService
+
+<PageTitle>Paramètres</PageTitle>
+
+<PageHeader Title="Paramètres"
+            Description="Formules de besoin, coefficients, pertes nomenclature et règles CBN — par famille produit." />
+
+<SectionTabs Tabs="@_paramTabs" ActiveHref="@ActiveParamHref" AriaLabel="Sections paramètres" />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <p>Chargement...</p>
+}
+else
+{
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+
+    <section class="card">
+        <div class="form-grid">
+            <div>
+                <label for="family">Famille produit fini</label>
+                <select id="family" class="form-control" @bind="_selectedFamilyCode" @bind:after="OnFamilyChangedAsync">
+                    @foreach (var family in _families)
+                    {
+                        <option value="@family.Code">@family.Label</option>
+                    }
+                </select>
+            </div>
+        </div>
+    </section>
+
+    <section class="formula-configurator">
+        @if (ShowFormulas)
+        {
+        <div class="formula-zone-top">
+            <div class="formula-builder card">
+                <h3>Construction de la formule</h3>
+                <p class="hint">Besoin de base = quantite nomenclature du composant (ligne CALCULATED).</p>
+
+                <div class="formula-tokens" aria-label="Formule en cours">
+                    @if (_formulaTokens.Count == 0)
+                    {
+                        <span class="subtle">Cliquez sur un argument ou un operateur pour construire la formule.</span>
+                    }
+                    else
+                    {
+                        @foreach (var (token, index) in _formulaTokens.Select((token, index) => (token, index)))
+                        {
+                            <span class="formula-token">
+                                @FormatTokenLabel(token)
+                                <button type="button" class="token-remove" title="Retirer" @onclick="() => RemoveToken(index)">×</button>
+                            </span>
+                        }
+                    }
+                </div>
+
+                <div class="formula-actions">
+                    <label class="checkbox-inline">
+                        <input type="checkbox" @bind="_applyOrderQuantity" />
+                        Calcul besoin global (multiplier par la quantite commande en CBN)
+                    </label>
+                    <div class="inline-form">
+                        <button type="button" class="btn-secondary btn-sm" @onclick="ClearFormula" disabled="@_isBusy">Reinitialiser</button>
+                        <button type="button" class="btn-primary btn-sm" @onclick="SaveFormulaAsync" disabled="@_isBusy">Enregistrer la formule</button>
+                    </div>
+                </div>
+
+                <div class="formula-preview">
+                    <h4>Apercu du calcul automatique</h4>
+                    <div class="preview-inputs">
+                        @if (_lossRates.Any(line => line.Behavior == "CALCULATED"))
+                        {
+                            <div>
+                                <label for="preview-line">Ligne nomenclature CALCULATED</label>
+                                <select id="preview-line" class="form-control"
+                                        value="@_previewLineId"
+                                        @onchange="OnPreviewLineChanged">
+                                    @foreach (var line in _lossRates.Where(line => line.Behavior == "CALCULATED"))
+                                    {
+                                        <option value="@line.LineId">L.@line.LineNo — @line.ComponentLabel (@line.QuantityBase.ToString("F3") @line.Unit)</option>
+                                    }
+                                </select>
+                            </div>
+                        }
+                        <div>
+                            <label for="preview-base">Besoin de base</label>
+                            <input id="preview-base" type="number" step="0.001" min="0.001" class="form-control input-num"
+                                   @bind="_previewBaseQuantity" @bind:event="oninput" />
+                        </div>
+                        <div>
+                            <label for="preview-order">Quantite commande</label>
+                            <input id="preview-order" type="number" step="1" min="1" class="form-control input-num"
+                                   @bind="_previewOrderQuantity" @bind:event="oninput" />
+                        </div>
+                        <div>
+                            <label for="preview-loss">Taux de perte</label>
+                            <input id="preview-loss" type="number" step="0.001" min="0" max="0.999" class="form-control input-num"
+                                   @bind="_previewLossRate" @bind:event="oninput" />
+                        </div>
+                        @foreach (var argument in _arguments.Where(argument => argument.IsActive && argument.Values.Count > 0))
+                        {
+                            <div>
+                                <label>@argument.Label</label>
+                                <select class="form-control"
+                                        value="@GetPreviewOptionId(argument.Code)"
+                                        @onchange="e => SetPreviewOptionId(argument.Code, e)">
+                                    @foreach (var value in argument.Values.Where(value => value.Status == "VALIDATED"))
+                                    {
+                                        <option value="@value.OptionId">@value.DisplayValue (coef @FormatPreviewCoefficient(value))</option>
+                                    }
+                                </select>
+                            </div>
+                        }
+                    </div>
+
+                    @if (!TryComputePreview(out var unitNet, out var unitGross, out var totalNet, out var totalGross, out var trace, out var previewError))
+                    {
+                        <p class="formula-preview-error subtle">@previewError</p>
+                    }
+                    else
+                    {
+                        <p class="formula-preview-result">
+                            <span>Besoin net unitaire : <strong>@unitNet.ToString("F3") @_previewUnit</strong></span>
+                            <span> — Besoin brut unitaire : <strong>@unitGross.ToString("F3") @_previewUnit</strong></span>
+                            @if (_previewLossRate > 0)
+                            {
+                                <span class="subtle"> (= @unitNet.ToString("F3") / (1 - @_previewLossRate.ToString("F3")))</span>
+                            }
+                        </p>
+                        @if (_applyOrderQuantity)
+                        {
+                            <p class="formula-preview-result formula-preview-result-secondary">
+                                <span>Besoin net total : <strong>@totalNet.ToString("F3") @_previewUnit</strong></span>
+                                <span> — Besoin brut total : <strong>@totalGross.ToString("F3") @_previewUnit</strong></span>
+                                @if (_previewLossRate > 0)
+                                {
+                                    <span class="subtle"> (= @totalNet.ToString("F3") / (1 - @_previewLossRate.ToString("F3")))</span>
+                                }
+                            </p>
+                        }
+                        <p class="subtle formula-preview-trace">@trace</p>
+                    }
+                </div>
+            </div>
+
+            <div class="formula-palette card">
+                <h4>Elements disponibles</h4>
+                <div class="palette-group">
+                    <strong>Base</strong>
+                    <button type="button" class="palette-chip" @onclick='() => AddToken("BesoinBase")'>Besoin de base</button>
+                </div>
+                <div class="palette-group">
+                    <strong>Arguments</strong>
+                    @foreach (var argument in _arguments.Where(argument => argument.IsActive))
+                    {
+                        <button type="button" class="palette-chip" @onclick='() => AddToken(argument.Code)'>@argument.Label</button>
+                    }
+                </div>
+                <div class="palette-group">
+                    <strong>Operateurs</strong>
+                    @foreach (var op in _operators)
+                    {
+                        <button type="button" class="palette-chip palette-op" @onclick='() => AddToken(op)'>@op</button>
+                    }
+                    <button type="button" class="palette-chip palette-op" @onclick='() => AddToken("(")'>(</button>
+                    <button type="button" class="palette-chip palette-op" @onclick='() => AddToken(")")'>)</button>
+                </div>
+            </div>
+        </div>
+        }
+
+        @if (ShowCoefficients)
+        {
+        <div class="formula-zone-bottom card">
+            <div class="zone-bottom-header">
+                <h3>Gestion des arguments</h3>
+                <button type="button" class="btn-primary btn-sm" @onclick="ShowNewArgumentForm" disabled="@_isBusy">+ Nouvel argument</button>
+            </div>
+
+            @if (_showNewArgumentForm)
+            {
+                <div class="inline-form new-argument-form">
+                    <input class="form-control" placeholder="Code (ex. GAUGE)" @bind="_newArgumentCode" @bind:event="oninput" />
+                    <input class="form-control" placeholder="Libelle (ex. Jauge)" @bind="_newArgumentLabel" @bind:event="oninput" />
+                    <button type="button" class="btn-secondary btn-sm" @onclick="CreateArgumentAsync" disabled="@_isBusy">Creer</button>
+                    <button type="button" class="btn-secondary btn-sm" @onclick="() => _showNewArgumentForm = false">Annuler</button>
+                </div>
+            }
+
+            <div class="argument-cards">
+                @foreach (var argument in _arguments)
+                {
+                    <article class="argument-card @(argument.IsActive ? "" : "argument-card-muted")">
+                        <header class="argument-card-header">
+                            <div>
+                                <strong>@argument.Label</strong>
+                                <div class="subtle">@argument.Code</div>
+                            </div>
+                            <div class="inline-form">
+                                <button type="button" class="btn-secondary btn-sm"
+                                        @onclick="() => ToggleArgumentActiveAsync(argument)" disabled="@_isBusy">
+                                    @(argument.IsActive ? "Desactiver" : "Reactiver")
+                                </button>
+                                <button type="button" class="btn-danger btn-sm"
+                                        @onclick="() => DeleteArgumentAsync(argument)" disabled="@_isBusy">Supprimer</button>
+                            </div>
+                        </header>
+
+                        <div class="inline-form">
+                            <input class="form-control"
+                                   placeholder="Libelle"
+                                   value="@GetArgumentLabelEdit(argument.Id)"
+                                   @oninput="e => SetArgumentLabelEdit(argument.Id, e.Value?.ToString() ?? string.Empty)" />
+                            <button type="button" class="btn-secondary btn-sm"
+                                    @onclick="() => SaveArgumentLabelAsync(argument)" disabled="@_isBusy">Renommer</button>
+                        </div>
+
+                        <table class="argument-values-table">
+                            <thead>
+                                <tr>
+                                    <th>Valeur</th>
+                                    <th class="num">Coefficient</th>
+                                    <th>Statut</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var value in argument.Values)
+                                {
+                                    <tr>
+                                        <td>@value.DisplayValue</td>
+                                        <td class="num">
+                                            <input type="number" step="0.01" min="0.01" class="form-control input-num"
+                                                   value="@GetCoefficientEdit(value.CoefficientId)"
+                                                   @oninput="e => SetCoefficientEdit(value.CoefficientId, e.Value?.ToString())" />
+                                        </td>
+                                        <td>@DisplayLabels.OptionStatus(value.Status)</td>
+                                        <td>
+                                            <button type="button" class="btn-secondary btn-sm"
+                                                    @onclick="() => SaveCoefficientAsync(value.CoefficientId)" disabled="@_isBusy">OK</button>
+                                            <button type="button" class="btn-secondary btn-sm"
+                                                    @onclick="() => ToggleValueStatusAsync(value)" disabled="@_isBusy">
+                                                @(value.Status == "VALIDATED" ? "Bloquer" : "Valider")
+                                            </button>
+                                            <button type="button" class="btn-danger btn-sm"
+                                                    @onclick="() => DeleteArgumentValueAsync(value)" disabled="@_isBusy">Supprimer</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+
+                        <div class="inline-form">
+                            <input class="form-control" placeholder="Nouvelle valeur"
+                                   value="@GetNewValueInput(argument.Code)"
+                                   @oninput="e => SetNewValueInput(argument.Code, e.Value?.ToString() ?? string.Empty)" />
+                            <button type="button" class="btn-secondary btn-sm"
+                                    @onclick='() => AddArgumentValueAsync(argument.Code)' disabled="@_isBusy">Ajouter valeur</button>
+                        </div>
+                    </article>
+                }
+            </div>
+        </div>
+        }
+    </section>
+
+    @if (ShowPertes)
+    {
+    <section class="card">
+        <h3>Pertes — nomenclature de base</h3>
+        <div class="stack">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ligne</th>
+                        <th>Composant</th>
+                        <th class="num">Perte</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _lossRates)
+                    {
+                        <tr>
+                            <td>@row.LineNo</td>
+                            <td>@row.ComponentCode</td>
+                            <td class="num">
+                                <input type="number" step="0.001" min="0" max="0.999" class="form-control input-num"
+                                       @bind="_lossEdits[row.LineId]" />
+                            </td>
+                            <td>
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveLossAsync(row.LineId)" disabled="@_isBusy">OK</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    }
+
+    @if (ShowCbn)
+    {
+    <section class="card">
+        <h3>Paramètres CBN</h3>
+        <div class="stack">
+            <h4>Regles CBN globales</h4>
+            <table>
+                <thead>
+                    <tr><th>Parametre</th><th>Valeur</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var param in _mvpParameters)
+                    {
+                        <tr>
+                            <td>@param.Label</td>
+                            <td><input class="form-control" @bind="_cbnEdits[param.Code]" /></td>
+                            <td>
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveCbnParamAsync(param.Code)" disabled="@_isBusy">OK</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    }
+}
+
+@code {
+    [Parameter] public string? Tab { get; set; }
+
+    private static readonly SectionTabItem[] _paramTabs =
+    [
+        new("Formules", "/parametres"),
+        new("Coefficients", "/parametres/coefficients"),
+        new("Pertes", "/parametres/pertes"),
+        new("Paramètres CBN", "/parametres/cbn"),
+        new("Général", "/parametres/general")
+    ];
+
+    private string EffectiveTab => string.IsNullOrWhiteSpace(Tab) ? "formules" : Tab.ToLowerInvariant();
+    private string ActiveParamHref => EffectiveTab switch
+    {
+        "coefficients" => "/parametres/coefficients",
+        "pertes" => "/parametres/pertes",
+        "cbn" => "/parametres/cbn",
+        "general" => "/parametres/general",
+        _ => "/parametres"
+    };
+    private bool ShowFormulas => EffectiveTab is "formules";
+    private bool ShowCoefficients => EffectiveTab is "coefficients";
+    private bool ShowPertes => EffectiveTab is "pertes";
+    private bool ShowCbn => EffectiveTab is "cbn";
+
+    private static readonly string[] _operators = ["+", "-", "*", "/"];
+
+    private string _selectedFamilyCode = "PULL_COL_ROND";
+    private bool _isLoading = true;
+    private bool _isBusy;
+    private string? _loadError;
+    private string? _message;
+    private bool _isError;
+    private bool _applyOrderQuantity = true;
+    private bool _showNewArgumentForm;
+
+    private List<ParameterFamilyItem> _families = [];
+    private List<CalculationArgumentItem> _arguments = [];
+    private List<string> _formulaTokens = [];
+    private List<BomLossRateItem> _lossRates = [];
+    private List<MvpParameterItem> _mvpParameters = [];
+
+    private readonly Dictionary<int, double> _coefficientEdits = [];
+    private readonly Dictionary<int, string> _argumentLabelEdits = [];
+    private readonly Dictionary<string, string> _newValueInputs = [];
+    private readonly Dictionary<int, double> _lossEdits = [];
+    private readonly Dictionary<string, string> _cbnEdits = [];
+
+    private string _newArgumentCode = string.Empty;
+    private string _newArgumentLabel = string.Empty;
+
+    private int _previewLineId;
+    private double _previewBaseQuantity = 0.5;
+    private double _previewOrderQuantity = 10;
+    private double _previewLossRate;
+    private string _previewUnit = "KG";
+    private readonly Dictionary<string, int> _previewOptionByArgument = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _families = (await ParameterService.GetFamiliesAsync()).ToList();
+            if (_families.Count > 0 && !_families.Any(f => f.Code == _selectedFamilyCode))
+            {
+                _selectedFamilyCode = _families[0].Code;
+            }
+
+            await LoadConfiguratorAsync();
+            await LoadAdvancedSettingsAsync();
+            InitializePreviewDefaults();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadConfiguratorAsync()
+    {
+        var state = await ParameterService.GetFormulaConfiguratorAsync(_selectedFamilyCode);
+        _arguments = state.Arguments.ToList();
+        _applyOrderQuantity = state.Formula.ApplyOrderQuantity;
+        _formulaTokens = FormulaEngine.Tokenize(state.Formula.Expression).ToList();
+
+        _argumentLabelEdits.Clear();
+        _newValueInputs.Clear();
+        foreach (var argument in _arguments)
+        {
+            _argumentLabelEdits[argument.Id] = argument.Label;
+            _newValueInputs[argument.Code] = string.Empty;
+            foreach (var value in argument.Values)
+            {
+                if (value.CoefficientId > 0)
+                {
+                    _coefficientEdits[value.CoefficientId] = value.Coefficient;
+                }
+            }
+        }
+
+        EnsurePreviewOptionSelections();
+    }
+
+    private void EnsurePreviewOptionSelections()
+    {
+        foreach (var argument in _arguments.Where(argument => argument.IsActive))
+        {
+            if (_previewOptionByArgument.ContainsKey(argument.Code))
+            {
+                continue;
+            }
+
+            var selected = argument.Values.FirstOrDefault(value => value.Status == "VALIDATED")
+                ?? argument.Values.FirstOrDefault();
+            if (selected is not null)
+            {
+                _previewOptionByArgument[argument.Code] = selected.OptionId;
+            }
+        }
+    }
+
+    private async Task OnFamilyChangedAsync()
+    {
+        await LoadConfiguratorAsync();
+        await LoadAdvancedSettingsAsync();
+        InitializePreviewDefaults();
+    }
+
+    private void InitializePreviewDefaults()
+    {
+        var calculatedLine = _lossRates.FirstOrDefault(line => line.Behavior == "CALCULATED")
+            ?? _lossRates.FirstOrDefault();
+        if (calculatedLine is not null)
+        {
+            _previewLineId = calculatedLine.LineId;
+            _previewBaseQuantity = calculatedLine.QuantityBase;
+            _previewLossRate = calculatedLine.LossRate;
+            _previewUnit = calculatedLine.Unit;
+        }
+
+        if (_previewOrderQuantity <= 0)
+        {
+            _previewOrderQuantity = 10;
+        }
+
+        _previewOptionByArgument.Clear();
+        foreach (var argument in _arguments.Where(argument => argument.IsActive))
+        {
+            var selected = argument.Values.FirstOrDefault(value => value.Status == "VALIDATED")
+                ?? argument.Values.FirstOrDefault();
+            if (selected is not null)
+            {
+                _previewOptionByArgument[argument.Code] = selected.OptionId;
+            }
+        }
+    }
+
+    private void OnPreviewLineChanged(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var lineId))
+        {
+            _previewLineId = lineId;
+            var line = _lossRates.FirstOrDefault(row => row.LineId == lineId);
+            if (line is not null)
+            {
+                _previewBaseQuantity = line.QuantityBase;
+                _previewLossRate = line.LossRate;
+                _previewUnit = line.Unit;
+            }
+        }
+    }
+
+    private int GetPreviewOptionId(string code) => _previewOptionByArgument.GetValueOrDefault(code, 0);
+
+    private void SetPreviewOptionId(string code, ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var optionId))
+        {
+            _previewOptionByArgument[code] = optionId;
+        }
+    }
+
+    private string FormatPreviewCoefficient(CalculationArgumentValueItem value)
+    {
+        if (value.CoefficientId > 0 && _coefficientEdits.TryGetValue(value.CoefficientId, out var edited))
+        {
+            return edited.ToString("F2");
+        }
+
+        return value.Coefficient.ToString("F2");
+    }
+
+    private bool TryComputePreview(
+        out double unitNet,
+        out double unitGross,
+        out double totalNet,
+        out double totalGross,
+        out string trace,
+        out string? error)
+    {
+        unitNet = 0;
+        unitGross = 0;
+        totalNet = 0;
+        totalGross = 0;
+        trace = string.Empty;
+        error = null;
+
+        if (_formulaTokens.Count == 0)
+        {
+            error = "Construisez une formule pour voir le calcul du besoin brut.";
+            return false;
+        }
+
+        try
+        {
+            var expression = FormulaEngine.BuildDisplayExpression(_formulaTokens);
+            var allowed = _arguments
+                .Where(argument => argument.IsActive)
+                .Select(argument => argument.Code)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            FormulaEngine.Validate(expression, allowed);
+
+            var coefficients = BuildPreviewCoefficients();
+            unitNet = GenerationEngine.CalculateNetQuantityFromFormula(
+                _previewBaseQuantity,
+                expression,
+                coefficients);
+            unitGross = GenerationEngine.CalculateGrossQuantity(unitNet, _previewLossRate);
+            totalNet = _applyOrderQuantity ? unitNet * _previewOrderQuantity : unitNet;
+            totalGross = GenerationEngine.CalculateGrossQuantity(totalNet, _previewLossRate);
+            trace = GenerationEngine.BuildFormulaTrace(
+                expression,
+                _previewBaseQuantity,
+                coefficients,
+                _applyOrderQuantity,
+                _previewOrderQuantity,
+                _previewLossRate);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private Dictionary<string, double> BuildPreviewCoefficients()
+    {
+        var coefficients = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var argument in _arguments.Where(argument => argument.IsActive))
+        {
+            if (!_previewOptionByArgument.TryGetValue(argument.Code, out var optionId))
+            {
+                continue;
+            }
+
+            var value = argument.Values.FirstOrDefault(item => item.OptionId == optionId);
+            if (value is null)
+            {
+                continue;
+            }
+
+            coefficients[argument.Code] = value.CoefficientId > 0
+                && _coefficientEdits.TryGetValue(value.CoefficientId, out var edited)
+                ? edited
+                : value.Coefficient;
+        }
+
+        return coefficients;
+    }
+
+    private async Task LoadAdvancedSettingsAsync()
+    {
+        _lossRates = (await ParameterService.GetBomLossRatesAsync(_selectedFamilyCode)).ToList();
+        _mvpParameters = (await ParameterService.GetMvpParametersAsync()).ToList();
+        _lossEdits.Clear();
+        foreach (var row in _lossRates)
+        {
+            _lossEdits[row.LineId] = row.LossRate;
+        }
+
+        _cbnEdits.Clear();
+        foreach (var param in _mvpParameters)
+        {
+            _cbnEdits[param.Code] = param.Value;
+        }
+    }
+
+    private void AddToken(string token)
+    {
+        _formulaTokens.Add(token);
+    }
+
+    private void RemoveToken(int index)
+    {
+        if (index >= 0 && index < _formulaTokens.Count)
+        {
+            _formulaTokens.RemoveAt(index);
+        }
+    }
+
+    private void ClearFormula()
+    {
+        _formulaTokens.Clear();
+        _formulaTokens.Add("BesoinBase");
+    }
+
+    private string FormatTokenLabel(string token) => token switch
+    {
+        "BesoinBase" => "Besoin de base",
+        "+" or "-" or "*" or "/" or "(" or ")" => token,
+        _ => _arguments.FirstOrDefault(argument => string.Equals(argument.Code, token, StringComparison.OrdinalIgnoreCase))?.Label ?? token
+    };
+
+    private string GetNewValueInput(string code) => _newValueInputs.GetValueOrDefault(code, string.Empty);
+
+    private void SetNewValueInput(string code, string value) => _newValueInputs[code] = value;
+
+    private string GetArgumentLabelEdit(int argumentId) => _argumentLabelEdits.GetValueOrDefault(argumentId, string.Empty);
+
+    private void SetArgumentLabelEdit(int argumentId, string value) => _argumentLabelEdits[argumentId] = value;
+
+    private double GetCoefficientEdit(int coefficientId) => _coefficientEdits.GetValueOrDefault(coefficientId, 1.0);
+
+    private void SetCoefficientEdit(int coefficientId, string? rawValue)
+    {
+        if (double.TryParse(rawValue, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            || double.TryParse(rawValue, out parsed))
+        {
+            _coefficientEdits[coefficientId] = parsed;
+        }
+    }
+
+    private async Task SaveFormulaAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.SaveRequirementFormulaAsync(new SaveRequirementFormulaRequest(
+                _selectedFamilyCode,
+                _formulaTokens,
+                _applyOrderQuantity));
+            _message = "Formule enregistree.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private void ShowNewArgumentForm()
+    {
+        _showNewArgumentForm = true;
+        _newArgumentCode = string.Empty;
+        _newArgumentLabel = string.Empty;
+    }
+
+    private async Task CreateArgumentAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.CreateCalculationArgumentAsync(new CreateCalculationArgumentRequest(
+                _newArgumentCode,
+                _newArgumentLabel));
+            _showNewArgumentForm = false;
+            _message = $"Argument {_newArgumentCode.Trim().ToUpperInvariant()} enregistre en base.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task SaveArgumentLabelAsync(CalculationArgumentItem argument)
+    {
+        await RunActionAsync(async () =>
+        {
+            var label = _argumentLabelEdits[argument.Id];
+            await ParameterService.UpdateCalculationArgumentAsync(new UpdateCalculationArgumentRequest(
+                argument.Id,
+                label,
+                argument.IsActive));
+            _message = $"Argument {argument.Code} mis a jour.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task ToggleArgumentActiveAsync(CalculationArgumentItem argument)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.UpdateCalculationArgumentAsync(new UpdateCalculationArgumentRequest(
+                argument.Id,
+                argument.Label,
+                !argument.IsActive));
+            _message = $"Argument {argument.Code} {(argument.IsActive ? "desactive" : "reactive")}.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task AddArgumentValueAsync(string attributeCode)
+    {
+        await RunActionAsync(async () =>
+        {
+            var value = _newValueInputs.GetValueOrDefault(attributeCode, string.Empty);
+            await ParameterService.CreateArgumentValueAsync(new CreateArgumentValueRequest(attributeCode, value));
+            _newValueInputs[attributeCode] = string.Empty;
+            _message = $"Valeur enregistree pour {attributeCode}.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task SaveCoefficientAsync(int coefficientId)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.UpdateArgumentValueCoefficientAsync(new UpdateArgumentValueCoefficientRequest(
+                coefficientId,
+                _coefficientEdits[coefficientId]));
+            _message = "Coefficient enregistre.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task ToggleValueStatusAsync(CalculationArgumentValueItem value)
+    {
+        await RunActionAsync(async () =>
+        {
+            var newStatus = value.Status == "VALIDATED" ? "BLOCKED" : "VALIDATED";
+            await ParameterService.UpdateArgumentValueStatusAsync(new UpdateArgumentValueStatusRequest(value.OptionId, newStatus));
+            _message = $"Valeur {value.DisplayValue} : {newStatus}.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task DeleteArgumentValueAsync(CalculationArgumentValueItem value)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.DeleteArgumentValueAsync(new DeleteArgumentValueRequest(value.OptionId));
+            _message = $"Valeur {value.DisplayValue} supprimee.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task DeleteArgumentAsync(CalculationArgumentItem argument)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.DeleteCalculationArgumentAsync(
+                new DeleteCalculationArgumentRequest(argument.Id, _selectedFamilyCode));
+            _message = $"Argument {argument.Code} supprime.";
+            await LoadConfiguratorAsync();
+        });
+    }
+
+    private async Task SaveLossAsync(int lineId)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.UpdateBomLossRateAsync(new UpdateLossRateRequest(lineId, _lossEdits[lineId]));
+            _message = "Taux de perte enregistre.";
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task SaveCbnParamAsync(string code)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.UpdateMvpParameterAsync(new UpdateMvpParameterRequest(code, _cbnEdits[code]));
+            _message = $"Parametre {code} enregistre.";
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task RunActionAsync(Func<Task> action)
+    {
+        _message = null;
+        _isError = false;
+        _isBusy = true;
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+}

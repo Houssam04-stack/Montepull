@@ -1,0 +1,210 @@
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@inject ApsCapacityService CapacityService
+
+@if (ShowPageHeader)
+{
+    <h2>Capacité disponible</h2>
+    <p class="hint">Cinq étages auditables. LOT en bains (jamais heures). Paliers sous délai d'activation.</p>
+}
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Ressource</label>
+            <select class="form-control" @bind="_resourceCode">
+                @foreach (var r in _resources)
+                {
+                    <option value="@r.Code">@r.Code — @r.Label (@r.ResourceType)</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label>Du</label>
+            <input type="date" class="form-control" @bind="_from" />
+        </div>
+        <div>
+            <label>Au</label>
+            <input type="date" class="form-control" @bind="_to" />
+        </div>
+        <div>
+            <label>Equipe (optionnel)</label>
+            <input class="form-control" @bind="_team" placeholder="JOUR / MATIN / NUIT" />
+        </div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="EvaluateAsync" disabled="@_busy">Calculer</button>
+            <button class="btn-secondary" @onclick="ReserveDemoAsync" disabled="@_busy">Reserver 1u demo</button>
+        </div>
+    </div>
+</section>
+
+@if (_result is not null)
+{
+    <section class="card">
+        <h3>@_result.Resource.Code — unite @_result.Resource.Unit</h3>
+        <p class="hint">Type @_result.Resource.ResourceType · ρ_cible @_result.Resource.RhoTarget · statut @_result.Resource.ConfirmationStatus</p>
+
+        <h4>Cap_cum</h4>
+        <p>Base engageable : <strong>@_result.CapCum.CapCumEngageable.ToString("F2")</strong> —
+           avec paliers : <strong>@_result.CapCum.CapCumWithActiveTiers.ToString("F2")</strong></p>
+        <ul>
+            @foreach (var t in _result.CapCum.Traces)
+            {
+                <li><code>@t.Stage</code> = @t.Value.ToString("F2") — @t.Formula — @t.Cause</li>
+            }
+        </ul>
+
+        <h4>Externe</h4>
+        <p>@_result.ExternalNote (valeur @_result.ExternalAvailability.ToString("F2"))</p>
+
+        <h4>Paliers</h4>
+        <table>
+            <thead><tr><th>Code</th><th>Activable</th><th>δ</th><th>Gain eff.</th><th>Raison</th></tr></thead>
+            <tbody>
+            @foreach (var p in _result.Tiers)
+            {
+                <tr>
+                    <td>@p.Code</td>
+                    <td>@(p.Activable ? "oui" : "non")</td>
+                    <td>@p.ActivationLeadDays</td>
+                    <td>@p.EffectiveGain.ToString("F2")</td>
+                    <td>@p.Reason</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+
+        <h4>Reservations</h4>
+        @if (_result.Reservations.Count == 0)
+        {
+            <p class="hint">Aucune reservation sur la fenetre.</p>
+        }
+        else
+        {
+            <table>
+                <thead><tr><th>Date</th><th>Qte</th><th>Unite</th><th>Aggrege</th><th>Raison</th></tr></thead>
+                <tbody>
+                @foreach (var r in _result.Reservations)
+                {
+                    <tr>
+                        <td>@r.BucketDate</td>
+                        <td>@r.Quantity.ToString("F2")</td>
+                        <td>@r.Unit</td>
+                        <td>@r.AggregateId</td>
+                        <td>@(r.Reason ?? "—")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section class="card">
+        <h4>Buckets — 5 etages</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th><th>Brute</th><th>Ouverte</th><th>Effective</th><th>Nette</th><th>Engageable</th><th>η</th><th>Reserve</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var b in _result.Buckets.Take(14))
+            {
+                <tr>
+                    <td>@b.BucketDate</td>
+                    <td>@b.CapBrute.ToString("F2")</td>
+                    <td>@b.CapOuverte.ToString("F2")</td>
+                    <td>@b.CapEffective.ToString("F2")</td>
+                    <td>@b.CapNette.ToString("F2")</td>
+                    <td>@b.CapEngageable.ToString("F2")</td>
+                    <td>@b.EtaApplied.ToString("F3")</td>
+                    <td>@b.Reserve.ToString("F2")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+
+        @if (_result.Buckets.Count > 0)
+        {
+            <h4>Traces du premier bucket</h4>
+            <ul>
+                @foreach (var t in _result.Buckets[0].Traces)
+                {
+                    <li><strong>@t.Stage</strong> = @t.Value.ToString("F2") @t.Unit<br /><em>@t.Formula</em> — @t.Cause</li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public bool ShowPageHeader { get; set; } = true;
+
+    private List<ApsCapacityResourceDto> _resources = [];
+    private string _resourceCode = "CC_REMAILLAGE";
+    private DateOnly _from = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly _to = DateOnly.FromDateTime(DateTime.Today.AddDays(6));
+    private string? _team = "JOUR";
+    private ApsCapacityWindowResultDto? _result;
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await CapacityService.EnsureReadyAsync();
+            _resources = (await CapacityService.ListResourcesAsync()).ToList();
+            if (_resources.Count > 0)
+            {
+                _resourceCode = _resources[0].Code;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task EvaluateAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _result = await CapacityService.EvaluateWindowAsync(new ApsCapacityWindowRequest(
+                _resourceCode, _from, _to, TeamCode: string.IsNullOrWhiteSpace(_team) ? null : _team));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReserveDemoAsync()
+    {
+        _busy = true;
+        try
+        {
+            await CapacityService.ReserveDemoAsync(_resourceCode, _from, 1, "demo-reserve-" + Guid.NewGuid().ToString("N")[..6]);
+            await EvaluateAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

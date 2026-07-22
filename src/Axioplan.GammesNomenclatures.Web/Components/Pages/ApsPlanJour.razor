@@ -1,0 +1,34 @@
+@page "/aps/plan-jour"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@inject ApsContractService ContractService
+
+<PageTitle>APS Plan jour</PageTitle>
+<h2>APS — Plan quotidien</h2>
+<p class="hint">Seul REMAILLAGE affiche une séquence. Autres postes : jour×poste×volume×mix — pas à la minute. Rôles non nominatifs.</p>
+@if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+<section class="card">
+    <h3>Postes</h3>
+    @foreach (var p in _posts)
+    {
+        <div><strong>@p.RoleOrPost</strong> (@p.Grain) — <pre>@p.PayloadJson</pre></div>
+    }
+    <h3>Rôles</h3>
+    @foreach (var p in _roles)
+    {
+        <div><strong>@p.RoleOrPost</strong> — <pre>@p.PayloadJson</pre></div>
+    }
+</section>
+@code {
+    private List<(string Grain, string RoleOrPost, DateOnly Start, string PayloadJson, string PlanRef)> _posts = [];
+    private List<(string Grain, string RoleOrPost, DateOnly Start, string PayloadJson, string PlanRef)> _roles = [];
+    private string? _error;
+    protected override async Task OnInitializedAsync() {
+        try {
+            await ContractService.EnsureReadyAsync();
+            var all = await ContractService.ListPlansAsync(null);
+            _posts = all.Where(p => p.Grain is "JOUR" or "JOUR_POSTE").ToList();
+            _roles = all.Where(p => p.Grain == "ROLE").ToList();
+        } catch (Exception ex) { _error = ex.Message; }
+    }
+}

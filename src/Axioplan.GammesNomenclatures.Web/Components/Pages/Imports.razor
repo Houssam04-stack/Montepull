@@ -1,0 +1,818 @@
+@page "/imports"
+@page "/imports/{Tab}"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Imports
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Microsoft.AspNetCore.Components.Forms
+@inject ImportService ImportService
+
+<PageTitle>Imports</PageTitle>
+
+<PageHeader Title="Imports"
+            Description="Import Excel commandes et nomenclatures BOM vers SQL Server. Aperçu, mapping et traçabilité des sessions." />
+
+<SectionTabs Tabs="@_importTabs" ActiveHref="@ActiveImportHref" AriaLabel="Types d'import" />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+
+@if (ShowOrders)
+{
+<section class="card">
+    <h3>Import commande</h3>
+    <div class="form-grid">
+        <div>
+            <label for="order-family">Famille cible</label>
+            <select id="order-family" class="form-control" @bind="_orderState.ProductFamilyCode">
+                @foreach (var family in _families)
+                {
+                    <option value="@family.Code">@family.Label</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="order-file">Fichier Excel commande</label>
+            <InputFile id="order-file" OnChange="OnOrderFileChangedAsync" accept=".xlsx,.xls" />
+            <p class="subtle">Exemple fourni : <code>DOUBLYGILF.xlsx</code>.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_orderState.Error))
+    {
+        <div class="alert alert-danger">@_orderState.Error</div>
+    }
+
+    @if (_orderState.Analysis is not null)
+    {
+        <div class="stack">
+            <div class="form-grid">
+                <div>
+                    <label for="order-sheet">Feuille</label>
+                    <select id="order-sheet" class="form-control" @bind="_orderState.SelectedSheetName" @bind:after="OnOrderSheetChanged">
+                        @foreach (var sheet in _orderState.Analysis.Sheets)
+                        {
+                            <option value="@sheet.SheetName">@sheet.SheetName (@sheet.RowCount lignes)</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="order-metadata-row">Ligne entetes metadonnees</label>
+                    <input id="order-metadata-row" class="form-control" type="number" min="1" @bind="_orderState.MetadataLabelRow" />
+                </div>
+                <div>
+                    <label for="order-metadata-values">Ligne valeurs metadonnees</label>
+                    <input id="order-metadata-values" class="form-control" type="number" min="1" @bind="_orderState.MetadataValueRow" />
+                </div>
+                <div>
+                    <label for="order-size-row">Ligne tailles</label>
+                    <input id="order-size-row" class="form-control" type="number" min="1" @bind="_orderState.SizeHeaderRow" />
+                </div>
+                <div>
+                    <label for="order-qty-row">Ligne quantites</label>
+                    <input id="order-qty-row" class="form-control" type="number" min="1" @bind="_orderState.QuantityRow" />
+                </div>
+            </div>
+
+            @if (GetSelectedOrderSheet() is { } orderSheet)
+            {
+                <div>
+                    <h4>Mapping metadonnees</h4>
+                    <table class="preview-table">
+                        <thead>
+                            <tr>
+                                <th>Champ cible</th>
+                                <th>Colonne source</th>
+                                <th>Detection</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var field in _orderState.Analysis.FieldDefinitions)
+                            {
+                                <tr>
+                                    <td>
+                                        <strong>@field.Label</strong>
+                                        @if (!string.IsNullOrWhiteSpace(field.HelpText))
+                                        {
+                                            <div class="subtle">@field.HelpText</div>
+                                        }
+                                    </td>
+                                    <td>
+                                        <select class="form-control" @bind="GetOrderMapping(field.Key).ColumnIndex">
+                                            <option value="">Non mappe</option>
+                                            @for (var index = 0; index < GetOrderMetadataColumns(orderSheet, _orderState.MetadataLabelRow).Count; index++)
+                                            {
+                                                var column = GetOrderMetadataColumns(orderSheet, _orderState.MetadataLabelRow)[index];
+                                                <option value="@index">@($"Col {index + 1} - {column}")</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td>@(GetOrderMapping(field.Key).IsAutoDetected ? "Auto" : "Manuel")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div>
+                    <h4>Apercu feuille commande</h4>
+                    @RenderPreviewTable(orderSheet)
+                </div>
+            }
+
+            @RenderWarnings(_orderState.Analysis.Warnings, "Warnings detection commande")
+
+            <button class="btn-primary" @onclick="RunOrderImportAsync" disabled="@_orderState.IsBusy">
+                @(_orderState.IsBusy ? "Import commande..." : "Importer la commande")
+            </button>
+
+            @if (_orderState.Result is not null)
+            {
+                <div class="alert alert-success">@_orderState.Result.Summary</div>
+                @RenderWarnings(_orderState.Result.Warnings, "Warnings import commande")
+            }
+        </div>
+    }
+</section>
+}
+
+@if (ShowBom)
+{
+<section class="card">
+    <h3>Import nomenclature</h3>
+    <div class="form-grid">
+        <div>
+            <label for="bom-family">Famille cible</label>
+            <select id="bom-family" class="form-control" @bind="_bomState.ProductFamilyCode">
+                @foreach (var family in _families)
+                {
+                    <option value="@family.Code">@family.Label</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="bom-file">Fichier Excel nomenclature</label>
+            <InputFile id="bom-file" OnChange="OnBomFileChangedAsync" accept=".xlsx,.xls" />
+            <p class="subtle">Exemple fourni : <code>Nomenclature DOULBYGILF.xls</code>.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_bomState.Error))
+    {
+        <div class="alert alert-danger">@_bomState.Error</div>
+    }
+
+    @if (_bomState.Analysis is not null)
+    {
+        <div class="stack">
+            <div class="form-grid">
+                <div>
+                    <label for="bom-sheet">Feuille</label>
+                    <select id="bom-sheet" class="form-control" @bind="_bomState.SelectedSheetName" @bind:after="OnBomSheetChanged">
+                        @foreach (var sheet in _bomState.Analysis.Sheets)
+                        {
+                            <option value="@sheet.SheetName">@sheet.SheetName (@sheet.RowCount lignes)</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="bom-header-row">Ligne entetes colonnes</label>
+                    <input id="bom-header-row" class="form-control" type="number" min="1" @bind="_bomState.HeaderRow" @bind:after="RefreshBomPreviewAsync" />
+                </div>
+                <div>
+                    <label for="bom-data-row">Premiere ligne de donnees</label>
+                    <input id="bom-data-row" class="form-control" type="number" min="1" @bind="_bomState.DataStartRow" @bind:after="RefreshBomPreviewAsync" />
+                </div>
+            </div>
+
+            @if (GetSelectedBomSheet() is { } bomSheet)
+            {
+                @if (bomSheet.MatchedProfile is { } matchedProfile)
+                {
+                    <div class="alert alert-info">
+                        Profil reconnu : <strong>@matchedProfile.ProfileName</strong>
+                        @if (!string.IsNullOrWhiteSpace(bomSheet.StructureFingerprint))
+                        {
+                            <span class="subtle">(@bomSheet.StructureFingerprint)</span>
+                        }
+                    </div>
+                }
+
+                @if (_bomProfiles.Count > 0)
+                {
+                    <div class="form-grid">
+                        <div>
+                            <label for="bom-profile">Profil memorise</label>
+                            <select id="bom-profile" class="form-control" @bind="_bomState.SelectedProfileId" @bind:after="ApplySelectedBomProfile">
+                                <option value="0">Detection automatique</option>
+                                @foreach (var profile in _bomProfiles)
+                                {
+                                    <option value="@profile.Id">@profile.ProfileName</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                }
+
+                <div>
+                    <h4>Mapping colonnes nomenclature</h4>
+                    <table class="preview-table">
+                        <thead>
+                            <tr>
+                                <th>Champ cible</th>
+                                <th>Colonne source</th>
+                                <th>Detection</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var field in _bomState.Analysis.FieldDefinitions)
+                            {
+                                <tr>
+                                    <td>
+                                        <strong>@field.Label</strong>
+                                        @if (!string.IsNullOrWhiteSpace(field.HelpText))
+                                        {
+                                            <div class="subtle">@field.HelpText</div>
+                                        }
+                                    </td>
+                                    <td>
+                                        <select class="form-control" @bind="GetBomMapping(field.Key).ColumnIndex">
+                                            <option value="">Non mappe</option>
+                                            @for (var index = 0; index < GetBomHeaderColumns(bomSheet).Count; index++)
+                                            {
+                                                var column = GetBomHeaderColumns(bomSheet)[index];
+                                                <option value="@index">@($"Col {index + 1} - {column}")</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td>@(GetBomMapping(field.Key).IsAutoDetected ? "Auto" : "Manuel")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="card subtle-card">
+                    <div class="preview-actions">
+                        <h4>Fournitures detectees (@(_bomState.ExtractedPreview.Count))</h4>
+                        <button type="button" class="btn-secondary" @onclick="RefreshBomPreviewAsync" disabled="@_bomState.IsBusy">
+                            Actualiser l'apercu import
+                        </button>
+                    </div>
+                    @if (_bomState.ExtractedPreview.Count == 0)
+                    {
+                        <div class="alert alert-warning">
+                            Aucune fourniture detectee. Verifiez la ligne d'entetes (souvent ligne 15 avec FOURNITURES / Reference / Emploi / Besoin) puis cliquez sur Actualiser.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="preview-table-wrap">
+                            @RenderExtractedPreviewTable(_bomState.ExtractedPreview)
+                        </div>
+                    }
+                </div>
+
+                <div>
+                    <h4>Apercu feuille nomenclature (@bomSheet.RowCount lignes)</h4>
+                    <div class="preview-scroll">
+                        @RenderPreviewTable(bomSheet, _bomState.HeaderRow)
+                    </div>
+                </div>
+
+                <div class="form-grid">
+                    <label class="checkbox-inline">
+                        <input type="checkbox" @bind="_bomState.SaveMappingProfile" />
+                        Memoriser ce mapping pour les prochains fichiers de meme structure
+                    </label>
+                    @if (_bomState.SaveMappingProfile)
+                    {
+                        <div>
+                            <label for="bom-profile-name">Nom du profil</label>
+                            <input id="bom-profile-name" class="form-control" @bind="_bomState.MappingProfileName" placeholder="Ex. Nomenclature Montepull standard" />
+                        </div>
+                    }
+                </div>
+            }
+
+            @RenderWarnings(_bomState.Analysis.Warnings, "Warnings detection nomenclature")
+
+            <button class="btn-primary" @onclick="RunBomImportAsync" disabled="@_bomState.IsBusy">
+                @(_bomState.IsBusy ? "Import nomenclature..." : "Importer la nomenclature")
+            </button>
+
+            @if (_bomState.Result is not null)
+            {
+                <div class="alert alert-success">@_bomState.Result.Summary</div>
+                @RenderWarnings(_bomState.Result.Warnings, "Warnings import nomenclature")
+            }
+        </div>
+    }
+</section>
+}
+
+@if (ShowOther)
+{
+    <section class="card">
+        <h3>Autres imports</h3>
+        <EmptyState Title="Imports complémentaires"
+                    Message="Stocks Montepull (script Python) et imports CSV versionnés MVP-0.">
+            <ul class="link-list">
+                <li><a href="/mvp0/imports">Imports CSV — Qualité des données MVP-0</a></li>
+                <li><code>scripts/import_stocks.py</code> — stocks (hors interface Blazor)</li>
+            </ul>
+        </EmptyState>
+    </section>
+}
+
+@code {
+    [Parameter] public string? Tab { get; set; }
+
+    private static readonly SectionTabItem[] _importTabs =
+    [
+        new("Commandes", "/imports"),
+        new("Nomenclatures / BOM", "/imports/bom"),
+        new("Autres imports", "/imports/autres")
+    ];
+
+    private string EffectiveTab => string.IsNullOrWhiteSpace(Tab) ? "commandes" : Tab.ToLowerInvariant();
+    private string ActiveImportHref => EffectiveTab switch
+    {
+        "bom" => "/imports/bom",
+        "autres" => "/imports/autres",
+        _ => "/imports"
+    };
+    private bool ShowOrders => EffectiveTab is "commandes" or "commande";
+    private bool ShowBom => EffectiveTab is "bom" or "nomenclatures";
+    private bool ShowOther => EffectiveTab is "autres" or "autre";
+
+    private const long MaxUploadBytes = 20 * 1024 * 1024;
+
+    private IReadOnlyList<ImportFamilyItem> _families = [];
+    private IReadOnlyList<ImportMappingProfile> _bomProfiles = [];
+    private string? _loadError;
+    private ImportUiState _orderState = new();
+    private ImportUiState _bomState = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _families = await ImportService.GetFamiliesAsync();
+            _bomProfiles = await ImportService.GetMappingProfilesAsync(ImportTargets.Bom);
+            var defaultFamily = _families.FirstOrDefault()?.Code ?? string.Empty;
+            _orderState.ProductFamilyCode = defaultFamily;
+            _bomState.ProductFamilyCode = defaultFamily;
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+    }
+
+    private async Task OnOrderFileChangedAsync(InputFileChangeEventArgs args)
+    {
+        _orderState = await AnalyzeFileAsync(args.File, ImportTargets.Order, _orderState.ProductFamilyCode);
+    }
+
+    private async Task OnBomFileChangedAsync(InputFileChangeEventArgs args)
+    {
+        _bomState = await AnalyzeFileAsync(args.File, ImportTargets.Bom, _bomState.ProductFamilyCode);
+    }
+
+    private async Task<ImportUiState> AnalyzeFileAsync(IBrowserFile file, string importTarget, string productFamilyCode)
+    {
+        var state = new ImportUiState
+        {
+            ProductFamilyCode = productFamilyCode,
+            FileName = file.Name,
+            IsBusy = true
+        };
+
+        try
+        {
+            await using var stream = file.OpenReadStream(MaxUploadBytes);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            state.FileContent = memory.ToArray();
+
+            state.Analysis = importTarget == ImportTargets.Order
+                ? await ImportService.AnalyzeOrderWorkbookAsync(state.FileContent, file.Name)
+                : await ImportService.AnalyzeBomWorkbookAsync(state.FileContent, file.Name);
+
+            var firstSheet = state.Analysis.Sheets.FirstOrDefault();
+            state.SelectedSheetName = firstSheet?.SheetName ?? string.Empty;
+            state.Mappings = state.Analysis.Sheets.FirstOrDefault()?.SuggestedMappings.ToDictionary(
+                item => item.FieldKey,
+                item => new EditableMapping
+                {
+                    FieldKey = item.FieldKey,
+                    ColumnIndex = item.ColumnIndex,
+                    SourceHeader = item.SourceHeader,
+                    IsAutoDetected = item.IsAutoDetected
+                }) ?? new Dictionary<string, EditableMapping>(StringComparer.OrdinalIgnoreCase);
+
+            if (importTarget == ImportTargets.Order && firstSheet is not null)
+            {
+                state.MetadataLabelRow = firstSheet.SuggestedMetadataLabelRow ?? 1;
+                state.MetadataValueRow = firstSheet.SuggestedMetadataValueRow ?? Math.Min(firstSheet.RowCount, state.MetadataLabelRow + 1);
+                state.SizeHeaderRow = firstSheet.SuggestedHeaderRows.FirstOrDefault();
+                state.QuantityRow = firstSheet.SuggestedQuantityRow ?? Math.Max(1, state.SizeHeaderRow + 1);
+            }
+
+            if (importTarget == ImportTargets.Bom && firstSheet is not null)
+            {
+                state.HeaderRow = firstSheet.SuggestedHeaderRows.FirstOrDefault();
+                state.DataStartRow = firstSheet.SuggestedDataStartRow ?? Math.Max(1, state.HeaderRow + 1);
+                state.ExtractedPreview = firstSheet.ExtractedPreviewRows?.ToList() ?? [];
+                state.MappingProfileName = firstSheet.MatchedProfile?.ProfileName ?? $"Profil {firstSheet.SheetName}";
+                state.SelectedProfileId = firstSheet.MatchedProfile?.Id ?? 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            state.Error = ex.Message;
+        }
+        finally
+        {
+            state.IsBusy = false;
+        }
+
+        return state;
+    }
+
+    private Task OnOrderSheetChanged()
+    {
+        if (GetSelectedOrderSheet() is { } sheet)
+        {
+            _orderState.MetadataLabelRow = sheet.SuggestedMetadataLabelRow ?? _orderState.MetadataLabelRow;
+            _orderState.MetadataValueRow = sheet.SuggestedMetadataValueRow ?? _orderState.MetadataValueRow;
+            _orderState.SizeHeaderRow = sheet.SuggestedHeaderRows.FirstOrDefault();
+            _orderState.QuantityRow = sheet.SuggestedQuantityRow ?? _orderState.QuantityRow;
+            MergeMappings(_orderState, sheet);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task OnBomSheetChanged()
+    {
+        if (GetSelectedBomSheet() is { } sheet)
+        {
+            _bomState.HeaderRow = sheet.SuggestedHeaderRows.FirstOrDefault();
+            _bomState.DataStartRow = sheet.SuggestedDataStartRow ?? Math.Max(1, _bomState.HeaderRow + 1);
+            _bomState.ExtractedPreview = sheet.ExtractedPreviewRows?.ToList() ?? [];
+            _bomState.SelectedProfileId = sheet.MatchedProfile?.Id ?? 0;
+            MergeMappings(_bomState, sheet);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void ApplySelectedBomProfile()
+    {
+        if (_bomState.SelectedProfileId <= 0)
+        {
+            if (GetSelectedBomSheet() is { } autoSheet)
+            {
+                MergeMappings(_bomState, autoSheet);
+                _bomState.HeaderRow = autoSheet.SuggestedHeaderRows.FirstOrDefault();
+                _bomState.DataStartRow = autoSheet.SuggestedDataStartRow ?? Math.Max(1, _bomState.HeaderRow + 1);
+            }
+
+            return;
+        }
+
+        var profile = _bomProfiles.FirstOrDefault(item => item.Id == _bomState.SelectedProfileId);
+        if (profile is null)
+        {
+            return;
+        }
+
+        _bomState.HeaderRow = profile.HeaderRow;
+        _bomState.DataStartRow = profile.DataStartRow;
+        _bomState.MappingProfileName = profile.ProfileName;
+        _bomState.Mappings = profile.Mappings.ToDictionary(
+            item => item.FieldKey,
+            item => new EditableMapping
+            {
+                FieldKey = item.FieldKey,
+                ColumnIndex = item.ColumnIndex,
+                SourceHeader = item.SourceHeader,
+                IsAutoDetected = false
+            },
+            StringComparer.OrdinalIgnoreCase);
+        _ = RefreshBomPreviewAsync();
+    }
+
+    private async Task RefreshBomPreviewAsync()
+    {
+        if (_bomState.FileContent is null || string.IsNullOrWhiteSpace(_bomState.SelectedSheetName))
+        {
+            return;
+        }
+
+        _bomState.IsBusy = true;
+        try
+        {
+            var request = BuildBomRequest(_bomState, saveProfile: false);
+            _bomState.ExtractedPreview = (await ImportService.PreviewBomImportAsync(_bomState.FileContent, request)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _bomState.Error = ex.Message;
+        }
+        finally
+        {
+            _bomState.IsBusy = false;
+        }
+    }
+
+    private async Task RunOrderImportAsync()
+    {
+        _orderState.Error = null;
+        _orderState.Result = null;
+        _orderState.IsBusy = true;
+
+        try
+        {
+            EnsureFileReady(_orderState);
+            var request = new OrderImportRequest(
+                _orderState.FileName,
+                _orderState.SelectedSheetName,
+                _orderState.ProductFamilyCode,
+                _orderState.MetadataLabelRow,
+                _orderState.MetadataValueRow,
+                _orderState.SizeHeaderRow,
+                _orderState.QuantityRow,
+                BuildMappings(_orderState));
+            _orderState.Result = await ImportService.ImportOrderAsync(_orderState.FileContent!, request);
+        }
+        catch (Exception ex)
+        {
+            _orderState.Error = ex.Message;
+        }
+        finally
+        {
+            _orderState.IsBusy = false;
+        }
+    }
+
+    private async Task RunBomImportAsync()
+    {
+        _bomState.Error = null;
+        _bomState.Result = null;
+        _bomState.IsBusy = true;
+
+        try
+        {
+            EnsureFileReady(_bomState);
+            var request = BuildBomRequest(_bomState, _bomState.SaveMappingProfile);
+            _bomState.Result = await ImportService.ImportBomAsync(_bomState.FileContent!, request);
+            if (_bomState.SaveMappingProfile)
+            {
+                _bomProfiles = await ImportService.GetMappingProfilesAsync(ImportTargets.Bom);
+            }
+        }
+        catch (Exception ex)
+        {
+            _bomState.Error = ex.Message;
+        }
+        finally
+        {
+            _bomState.IsBusy = false;
+        }
+    }
+
+    private static void EnsureFileReady(ImportUiState state)
+    {
+        if (state.FileContent is null || state.Analysis is null || string.IsNullOrWhiteSpace(state.SelectedSheetName))
+        {
+            throw new InvalidOperationException("Chargez d'abord un fichier Excel et selectionnez une feuille.");
+        }
+
+        if (string.IsNullOrWhiteSpace(state.ProductFamilyCode))
+        {
+            throw new InvalidOperationException("Selectionnez une famille cible.");
+        }
+    }
+
+    private static BomImportRequest BuildBomRequest(ImportUiState state, bool saveProfile)
+        => new(
+            state.FileName,
+            state.SelectedSheetName,
+            state.ProductFamilyCode,
+            state.HeaderRow,
+            state.DataStartRow,
+            BuildMappings(state),
+            saveProfile,
+            string.IsNullOrWhiteSpace(state.MappingProfileName) ? null : state.MappingProfileName);
+
+    private static IReadOnlyList<ImportFieldMapping> BuildMappings(ImportUiState state)
+        => state.Mappings.Values
+            .Select(item => new ImportFieldMapping(item.FieldKey, item.ColumnIndex, item.SourceHeader, item.IsAutoDetected))
+            .ToList();
+
+    private ImportSheetAnalysis? GetSelectedOrderSheet()
+        => _orderState.Analysis?.Sheets.FirstOrDefault(sheet => sheet.SheetName == _orderState.SelectedSheetName);
+
+    private ImportSheetAnalysis? GetSelectedBomSheet()
+        => _bomState.Analysis?.Sheets.FirstOrDefault(sheet => sheet.SheetName == _bomState.SelectedSheetName);
+
+    private EditableMapping GetOrderMapping(string key)
+        => GetMapping(_orderState, key);
+
+    private EditableMapping GetBomMapping(string key)
+        => GetMapping(_bomState, key);
+
+    private static EditableMapping GetMapping(ImportUiState state, string key)
+    {
+        if (!state.Mappings.TryGetValue(key, out var mapping))
+        {
+            mapping = new EditableMapping { FieldKey = key };
+            state.Mappings[key] = mapping;
+        }
+
+        return mapping;
+    }
+
+    private static IReadOnlyList<string> GetOrderMetadataColumns(ImportSheetAnalysis sheet, int rowNumber)
+    {
+        var row = sheet.PreviewRows.FirstOrDefault(item => item.RowNumber == rowNumber)
+            ?? sheet.PreviewRows.FirstOrDefault(item => item.RowNumber == sheet.SuggestedMetadataLabelRow)
+            ?? sheet.PreviewRows.FirstOrDefault(item => item.RowNumber == sheet.SuggestedHeaderRows.FirstOrDefault());
+        return row?.Cells ?? [];
+    }
+
+    private IReadOnlyList<string> GetBomHeaderColumns(ImportSheetAnalysis sheet)
+    {
+        var row = sheet.PreviewRows.FirstOrDefault(item => item.RowNumber == _bomState.HeaderRow)
+            ?? sheet.PreviewRows.FirstOrDefault(item => item.RowNumber == sheet.SuggestedHeaderRows.FirstOrDefault());
+        return row?.Cells ?? [];
+    }
+
+    private static void MergeMappings(ImportUiState state, ImportSheetAnalysis sheet)
+    {
+        foreach (var item in sheet.SuggestedMappings)
+        {
+            if (state.Mappings.TryGetValue(item.FieldKey, out var existing)
+                && existing.ColumnIndex is not null)
+            {
+                continue;
+            }
+
+            state.Mappings[item.FieldKey] = new EditableMapping
+            {
+                FieldKey = item.FieldKey,
+                ColumnIndex = item.ColumnIndex,
+                SourceHeader = item.SourceHeader,
+                IsAutoDetected = item.IsAutoDetected
+            };
+        }
+    }
+
+    private RenderFragment RenderPreviewTable(ImportSheetAnalysis sheet, int? highlightRow = null) => builder =>
+    {
+        builder.OpenElement(0, "table");
+        builder.AddAttribute(1, "class", "data-table preview-table");
+        builder.OpenElement(2, "thead");
+        builder.OpenElement(3, "tr");
+        builder.OpenElement(4, "th");
+        builder.AddContent(5, "#");
+        builder.CloseElement();
+        var maxColumns = sheet.PreviewRows.Any() ? sheet.PreviewRows.Max(row => row.Cells.Count) : 0;
+        for (var index = 0; index < maxColumns; index++)
+        {
+            builder.OpenElement(10 + index, "th");
+            builder.AddContent(11 + index, $"Col {index + 1}");
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+        builder.CloseElement();
+
+        builder.OpenElement(100, "tbody");
+        var sequence = 101;
+        foreach (var row in sheet.PreviewRows)
+        {
+            builder.OpenElement(sequence++, "tr");
+            if (highlightRow == row.RowNumber)
+            {
+                builder.AddAttribute(sequence++, "class", "preview-row-highlight");
+            }
+
+            builder.OpenElement(sequence++, "td");
+            builder.AddContent(sequence++, row.RowNumber);
+            builder.CloseElement();
+            foreach (var cell in row.Cells)
+            {
+                builder.OpenElement(sequence++, "td");
+                builder.AddContent(sequence++, cell);
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderExtractedPreviewTable(IReadOnlyList<BomExtractedPreviewRow> rows) => builder =>
+    {
+        builder.OpenElement(0, "table");
+        builder.AddAttribute(1, "class", "data-table preview-table");
+        builder.OpenElement(2, "thead");
+        builder.OpenElement(3, "tr");
+        foreach (var header in new[] { "Ligne", "Designation", "Reference", "Emploi", "Besoin", "Qte", "Unite", "Statut", "Warnings" })
+        {
+            builder.OpenElement(4, "th");
+            builder.AddContent(5, header);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+
+        builder.OpenElement(100, "tbody");
+        var sequence = 101;
+        foreach (var row in rows)
+        {
+            builder.OpenElement(sequence++, "tr");
+            foreach (var value in new object?[]
+            {
+                row.SourceRowNumber,
+                row.Designation,
+                row.Reference,
+                row.Emploi,
+                row.Besoin,
+                row.Quantity,
+                row.Unit,
+                row.Status,
+                string.Join("; ", row.Warnings)
+            })
+            {
+                builder.OpenElement(sequence++, "td");
+                builder.AddContent(sequence++, value);
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderWarnings(IReadOnlyList<string> warnings, string title) => builder =>
+    {
+        if (warnings.Count == 0)
+        {
+            return;
+        }
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "alert alert-warning");
+        builder.OpenElement(2, "strong");
+        builder.AddContent(3, title);
+        builder.CloseElement();
+        builder.OpenElement(4, "ul");
+        builder.AddAttribute(5, "class", "warning-list");
+        var sequence = 6;
+        foreach (var warning in warnings.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            builder.OpenElement(sequence++, "li");
+            builder.AddContent(sequence++, warning);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private sealed class ImportUiState
+    {
+        public string ProductFamilyCode { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public byte[]? FileContent { get; set; }
+        public WorkbookImportAnalysis? Analysis { get; set; }
+        public string SelectedSheetName { get; set; } = string.Empty;
+        public int MetadataLabelRow { get; set; } = 1;
+        public int MetadataValueRow { get; set; } = 2;
+        public int SizeHeaderRow { get; set; } = 1;
+        public int QuantityRow { get; set; } = 2;
+        public int HeaderRow { get; set; } = 1;
+        public int DataStartRow { get; set; } = 2;
+        public int SelectedProfileId { get; set; }
+        public bool SaveMappingProfile { get; set; }
+        public string MappingProfileName { get; set; } = string.Empty;
+        public List<BomExtractedPreviewRow> ExtractedPreview { get; set; } = [];
+        public Dictionary<string, EditableMapping> Mappings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public bool IsBusy { get; set; }
+        public string? Error { get; set; }
+        public ImportExecutionResult? Result { get; set; }
+    }
+
+    private sealed class EditableMapping
+    {
+        public string FieldKey { get; set; } = string.Empty;
+        public int? ColumnIndex { get; set; }
+        public string? SourceHeader { get; set; }
+        public bool IsAutoDetected { get; set; }
+    }
+}

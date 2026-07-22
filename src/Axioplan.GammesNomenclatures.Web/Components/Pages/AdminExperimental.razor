@@ -1,0 +1,45 @@
+@page "/admin/experimental"
+@rendermode InteractiveServer
+
+<PageTitle>Outils expérimentaux</PageTitle>
+
+<PageHeader Title="Outils expérimentaux APS"
+            Description="Fonctions prototype — ne pas confondre avec le parcours opérationnel (charges, planification)." />
+
+<AlertPanel Variant="warning" Title="Zone expérimentale">
+    Ces outils portent le badge <StatusBadge Status="ModuleStatusKind.Experimental" Experimental="true" />.
+    Ils ne sont pas requis pour le GO/NO-GO qualité des données (MVP-0).
+</AlertPanel>
+
+<div class="experimental-grid">
+    @foreach (var tool in Tools)
+    {
+        <article class="card experimental-card">
+            <div class="experimental-card-header">
+                <h3>@tool.Title</h3>
+                <StatusBadge Status="ModuleStatusKind.Experimental" Experimental="true" />
+            </div>
+            <p class="hint">@tool.Description</p>
+            <a class="btn-secondary" href="@tool.Href">Ouvrir</a>
+        </article>
+    }
+</div>
+
+@code {
+    private static readonly (string Title, string Description, string Href)[] Tools =
+    [
+        ("Hub APS", "Vue d'ensemble des modules APS.", "/aps"),
+        ("Référentiel APS", "Segments, calendriers, régimes.", "/aps/referentiel"),
+        ("Compilateur", "Recompilation squelette.", "/aps/compilateur"),
+        ("CBN segments", "CBN APS par segment.", "/aps/cbn"),
+        ("CTP", "Capable-to-Promise.", "/aps/ctp"),
+        ("Promesses", "Promesses clients.", "/aps/promesses"),
+        ("Contrats", "Contrats démo.", "/aps/contrats"),
+        ("Plan hebdo / jour", "Plans démo.", "/aps/plan-hebdo"),
+        ("Cycle nocturne", "Batch nocturne.", "/aps/cycle-nocturne"),
+        ("Recette", "Verrous et recette démo.", "/aps/recette"),
+        ("Nervosité", "Indicateur nervosité.", "/aps/nervosite"),
+        ("Simulation gammes", "Génération nomenclatures (legacy).", "/"),
+        ("Simulation MRP atelier", "Atelier simulation complet.", "/simulation-mrp")
+    ];
+}

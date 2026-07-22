@@ -1,0 +1,133 @@
+@inherits LayoutComponentBase
+@inject NavigationManager Nav
+
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <a href="/accueil" class="sidebar-title">Axioplan</a>
+            <p class="sidebar-subtitle">Gammes &amp; Nomenclatures</p>
+        </div>
+
+        <nav class="sidebar-nav">
+            @foreach (var group in NavGroups)
+            {
+                <div class="nav-group">
+                    <p class="nav-group-label">@group.Label</p>
+                    @foreach (var item in group.Items)
+                    {
+                        <a href="@item.Href" class="nav-item @(IsActive(item) ? "active" : null)">@item.Label</a>
+                    }
+                </div>
+            }
+        </nav>
+    </aside>
+
+    <div class="app-main">
+        @if (ShowExperimentalBanner)
+        {
+            <AlertPanel Variant="warning" Title="Zone expérimentale">
+                Cette page est un prototype APS. Pour la validation des données, utilisez
+                <a href="/mvp0">Qualité des données — MVP-0</a>.
+            </AlertPanel>
+        }
+
+        @if (ShowMvp0Bar)
+        {
+            <Mvp0ProgressBar CurrentStep="@Mvp0CurrentStep" CampaignId="@Mvp0CampaignId" />
+        }
+
+        <main class="content-area">
+            @Body
+        </main>
+    </div>
+</div>
+
+@code {
+    private sealed record NavItem(string Label, string Href, string[] MatchPrefixes);
+    private sealed record NavGroup(string Label, NavItem[] Items);
+
+    private static readonly NavGroup[] NavGroups =
+    [
+        new("Accueil", [new("Tableau de bord", "/accueil", ["/accueil"])]),
+        new("Référentiels",
+        [
+            new("Articles", "/articles", ["/articles"]),
+            new("Nomenclatures et gammes", "/nomenclatures-gammes", ["/nomenclatures-gammes", "/articles/bom"]),
+            new("Stock", "/stock", ["/stock"]),
+            new("Paramètres", "/parametres", ["/parametres"])
+        ]),
+        new("Préparation des données",
+        [
+            new("Imports", "/imports", ["/imports"]),
+            new("Qualité des données — MVP-0", "/mvp0", ["/mvp0"])
+        ]),
+        new("Calculs et planification",
+        [
+            new("CBN — Calcul des besoins", "/cbn", ["/cbn"]),
+            new("Pegging", "/pegging", ["/pegging"]),
+            new("Charges et capacités", "/charges-capacites", ["/charges-capacites", "/aps/capacites", "/aps/charges", "/aps/flux"]),
+            new("Planification APS", "/aps/planification", ["/aps/planification", "/aps/resultats"])
+        ]),
+        new("Administration / Avancé",
+        [
+            new("Journal", "/aps/journal", ["/aps/journal"]),
+            new("Attendus", "/aps/attendus", ["/aps/attendus"]),
+            new("Outils expérimentaux", "/admin/experimental", ["/admin/experimental", "/aps"]),
+            new("Documentation technique", "/admin/documentation", ["/admin/documentation"])
+        ])
+    ];
+
+    private string Path => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant();
+    private bool PathIs(string prefix) => Path == prefix || Path.StartsWith(prefix + "/", StringComparison.Ordinal);
+
+    private bool ShowExperimentalBanner =>
+        PathIs("/aps") && !PathIs("/aps/planification") && !PathIs("/aps/resultats")
+        || PathIs("/admin/experimental");
+
+    private bool ShowMvp0Bar => Path.StartsWith("/mvp0", StringComparison.Ordinal);
+
+    private int Mvp0CurrentStep
+    {
+        get
+        {
+            if (PathIs("/mvp0/imports")) return 2;
+            if (PathIs("/mvp0/validation") || PathIs("/mvp0/anomalies")) return 3;
+            if (PathIs("/mvp0/bypass")) return 5;
+            if (PathIs("/mvp0/fiabilite")) return 6;
+            if (PathIs("/mvp0/backtest")) return 7;
+            if (PathIs("/mvp0/gate")) return 9;
+            if (PathIs("/mvp0/rapport")) return 10;
+            if (Path.StartsWith("/mvp0/workflow/", StringComparison.Ordinal)) return 3;
+            return 1;
+        }
+    }
+
+    private Guid? Mvp0CampaignId
+    {
+        get
+        {
+            const string prefix = "/mvp0/workflow/";
+            if (!Path.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var idPart = Path[prefix.Length..];
+            return Guid.TryParse(idPart, out var id) ? id : null;
+        }
+    }
+
+    private bool IsActive(NavItem item)
+    {
+        foreach (var prefix in item.MatchPrefixes)
+        {
+            var p = prefix.TrimEnd('/').ToLowerInvariant();
+            if (Path == p || Path.StartsWith(p + "/", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

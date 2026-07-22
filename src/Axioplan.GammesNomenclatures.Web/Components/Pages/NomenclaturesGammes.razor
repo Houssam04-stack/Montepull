@@ -1,0 +1,9 @@
+@page "/nomenclatures-gammes"
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized()
+    {
+        Nav.NavigateTo("/articles/bom", replace: true);
+    }
+}

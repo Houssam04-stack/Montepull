@@ -1,0 +1,905 @@
+@page "/articles"
+@page "/articles/{Section}"
+@rendermode InteractiveServer
+@inject ArticleService ArticleService
+
+<PageTitle>Configurateur Articles</PageTitle>
+
+<PageHeader Title="Articles"
+            Description="Création, configuration, duplication et gouvernance du référentiel article." />
+
+<ArticleSectionTabs ActiveSection="@EffectiveSection" />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <p>Chargement...</p>
+}
+else
+{
+    @if (IsSubSection)
+    {
+        <p class="hint">
+            <a href="/articles">← Retour à la liste articles</a>
+        </p>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+
+    @switch (EffectiveSection)
+    {
+        case "list":
+            <section class="card">
+                <h3>Articles (@FilteredArticles.Count / @_articles.Count)</h3>
+                <p class="hint">Utilisez <strong>Traçabilité</strong> sur une ligne. Pour créer ou configurer, ouvrez le menu <strong>Articles</strong> en haut.</p>
+                <div class="form-grid">
+                    <div class="info-span-2">
+                        <label for="articleSearch">Rechercher</label>
+                        <input id="articleSearch"
+                               class="form-control"
+                               placeholder="Code, libellé, famille, type, client..."
+                               @bind="_searchText"
+                               @bind:event="oninput" />
+                    </div>
+                </div>
+
+                @if (_selectedArticle is not null)
+                {
+                    <section class="card trace-panel" id="article-trace">
+                        <div class="row-actions" style="justify-content:space-between;width:100%">
+                            <h3 style="margin:0">Traçabilité — @_selectedArticle.Code</h3>
+                            <button type="button" class="btn-secondary" @onclick="ClearSelection">Fermer</button>
+                        </div>
+                        <dl class="info-list mt-3">
+                            <div><dt>Libellé</dt><dd>@_selectedArticle.Label</dd></div>
+                            <div><dt>Famille</dt><dd>@_selectedArticle.FamilyLabel (@_selectedArticle.FamilyCode)</dd></div>
+                            <div><dt>Type</dt><dd>@DisplayLabels.ArticleType(_selectedArticle.ArticleType)</dd></div>
+                            <div><dt>Mode création</dt><dd>@DisplayLabels.CreationMode(_selectedArticle.CreationMode)</dd></div>
+                            <div><dt>Unité</dt><dd>@DisplayLabels.Unit(_selectedArticle.DefaultUnit)</dd></div>
+                            <div><dt>Client</dt><dd>@(_selectedArticle.CustomerCode ?? "—")</dd></div>
+                            <div><dt>Article source</dt><dd>@(_selectedArticle.SourceArticleCode ?? "—")</dd></div>
+                            <div><dt>Créé le</dt><dd>@_selectedArticle.CreatedAt.ToLocalTime().ToString("g")</dd></div>
+                            <div><dt>Session config</dt><dd>@(_selectedArticle.ConfigurationSessionId is int cs ? $"#{cs}" : "—")</dd></div>
+                            <div><dt>Session duplication</dt><dd>@(_selectedArticle.DuplicationSessionId is int ds ? $"#{ds}" : "—")</dd></div>
+                        </dl>
+
+                        @if (SelectedTraces.Count > 0)
+                        {
+                            <h4 class="mt-3">Historique sessions</h4>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Type</th>
+                                        <th>Session</th>
+                                        <th>Date</th>
+                                        <th>Client</th>
+                                        <th>Famille</th>
+                                        <th>Source</th>
+                                        <th>Nouveau code</th>
+                                        <th>Articles</th>
+                                        <th>Statut</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var trace in SelectedTraces)
+                                    {
+                                        <tr>
+                                            <td>@trace.TraceType</td>
+                                            <td>#@trace.SessionId</td>
+                                            <td>@trace.CreatedAt.ToLocalTime().ToString("g")</td>
+                                            <td>@(trace.CustomerCode ?? "—")</td>
+                                            <td>@(trace.FamilyCode ?? "—")</td>
+                                            <td>@(trace.SourceArticleCode ?? "—")</td>
+                                            <td>@(trace.NewArticleCode ?? "—")</td>
+                                            <td>@trace.ArticleCount</td>
+                                            <td>@trace.Status @(trace.Notes is not null ? $"— {trace.Notes}" : "")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        else
+                        {
+                            <p class="hint mt-3">Pas de session de configuration/duplication liée (ex. article manuel ou import stock).</p>
+                        }
+
+                        @if (SelectedBomLink is not null)
+                        {
+                            <h4 class="mt-3">Lien BOM / Gamme</h4>
+                            <dl class="info-list">
+                                <div><dt>Famille produit</dt><dd>@(SelectedBomLink.ProductFamilyCode ?? "—")</dd></div>
+                                <div><dt>BOM base</dt><dd>@(SelectedBomLink.BomBaseCode ?? "—")</dd></div>
+                                <div><dt>Gamme base</dt><dd>@(SelectedBomLink.RoutingBaseCode ?? "—")</dd></div>
+                                <div><dt>Statut lien</dt><dd>@SelectedBomLink.LinkStatus</dd></div>
+                            </dl>
+                        }
+                    </section>
+                }
+
+                <table class="mt-3">
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th>Libellé</th>
+                            <th>Famille</th>
+                            <th>Type</th>
+                            <th>Mode</th>
+                            <th>Client</th>
+                            <th>Source</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var article in DisplayedArticles)
+                        {
+                            <tr class="@(article.Id == _selectedArticleId ? "selected" : null)" @key="article.Id">
+                                <td>@article.Code</td>
+                                <td>@article.Label</td>
+                                <td>@article.FamilyLabel</td>
+                                <td>@DisplayLabels.ArticleType(article.ArticleType)</td>
+                                <td>@DisplayLabels.CreationMode(article.CreationMode)</td>
+                                <td>@(article.CustomerCode ?? "—")</td>
+                                <td>@(article.SourceArticleCode ?? "—")</td>
+                                <td>
+                                    <div class="row-actions">
+                                        <button type="button" class="btn-secondary" @onclick="() => SelectArticle(article)">Traçabilité</button>
+                                        @if (_dupEditingId == article.Id)
+                                        {
+                                            <input class="form-control" @bind="_dupNewCode" placeholder="Nouveau code" />
+                                            <button type="button" class="btn-primary" @onclick="() => DuplicateFromRowAsync(article)" disabled="@_isBusy">OK</button>
+                                            <button type="button" class="btn-secondary" @onclick="CancelDuplicate">Annuler</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn-secondary" @onclick="() => StartDuplicate(article)">Dupliquer</button>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (FilteredArticles.Count > MaxVisibleArticles && string.IsNullOrWhiteSpace(_searchText))
+                {
+                    <p class="hint mt-3">Affichage des @MaxVisibleArticles premiers articles sur @FilteredArticles.Count — affinez la recherche pour trouver un code précis.</p>
+                }
+            </section>
+            break;
+
+        case "manual":
+            <section class="card">
+                <h3>Création manuelle</h3>
+                <div class="form-grid">
+                    <div>
+                        <label>Code article *</label>
+                        <input class="form-control" @bind="_manualCode" />
+                    </div>
+                    <div>
+                        <label>Libellé *</label>
+                        <input class="form-control" @bind="_manualLabel" />
+                    </div>
+                    <div>
+                        <label>Famille *</label>
+                        <select class="form-control" @bind="_manualFamilyCode">
+                            @foreach (var family in _families)
+                            {
+                                <option value="@family.Code">@family.Label (@family.CategoryLabel)</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label>Type</label>
+                        <select class="form-control" @bind="_manualArticleType">
+                            <option value="FINISHED_GOOD">Produit fini</option>
+                            <option value="SEMI_FINISHED">Semi-fini</option>
+                            <option value="COMPONENT">Composant</option>
+                            <option value="SERVICE">Service</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Unité</label>
+                        <select class="form-control" @bind="_manualUnit">
+                            <option value="PIECE">PIECE</option>
+                            <option value="KG">KG</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn-primary" @onclick="CreateManualAsync" disabled="@_isBusy">Créer l'article</button>
+            </section>
+            break;
+
+        case "configured":
+            <section class="card">
+                <h3>Création configurée — Vignette composition</h3>
+                <p class="hint">Règle : tailles × couleurs (× langues si génératrice pour le client).</p>
+                <div class="form-grid">
+                    <div>
+                        <label>Client *</label>
+                        <select class="form-control" @bind="_configCustomerCode" @bind:after="OnConfigCustomerChanged">
+                            @foreach (var customer in _customers)
+                            {
+                                <option value="@customer.Code">@customer.Label</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label>Commande client</label>
+                        <input class="form-control" @bind="_configOrderCode" placeholder="BC0001" />
+                    </div>
+                    <div>
+                        <label>Code article PF *</label>
+                        <input class="form-control" @bind="_configFinishedGoodCode" placeholder="PULL123" />
+                    </div>
+                    <div>
+                        <label>Composition *</label>
+                        <input class="form-control" @bind="_configComposition" placeholder="70% laine / 30% acrylique" />
+                    </div>
+                    <div>
+                        <label>Code entretien *</label>
+                        <input class="form-control" @bind="_configCareCode" placeholder="LAV30-SECHNON" />
+                    </div>
+                </div>
+                <div class="checkbox-group">
+                    <span class="group-label">Tailles *</span>
+                    @foreach (var size in _availableSizes)
+                    {
+                        <label>
+                            <input type="checkbox" checked="@_selectedSizes.Contains(size)" @onchange="e => ToggleSize(size, (bool)e.Value!)" />
+                            @size
+                        </label>
+                    }
+                </div>
+                <div class="checkbox-group">
+                    <span class="group-label">Couleurs</span>
+                    @foreach (var color in _availableColors)
+                    {
+                        <label>
+                            <input type="checkbox" checked="@_selectedColors.Contains(color)" @onchange="e => ToggleColor(color, (bool)e.Value!)" />
+                            @color
+                        </label>
+                    }
+                </div>
+                @if (_configLanguageIsGenerator)
+                {
+                    <div class="checkbox-group">
+                        <span class="group-label">Langues *</span>
+                        @foreach (var lang in _availableLanguages)
+                        {
+                            <label>
+                                <input type="checkbox" checked="@_selectedLanguages.Contains(lang)" @onchange="e => ToggleLanguage(lang, (bool)e.Value!)" />
+                                @lang
+                            </label>
+                        }
+                    </div>
+                }
+                <button class="btn-primary" @onclick="ConfigureArticlesAsync" disabled="@_isBusy">Générer les articles</button>
+
+                @if (_configResult is not null)
+                {
+                    <div class="summary-banner mt-3">
+                        <p><strong>@_configResult.GeneratedCount</strong> article(s) généré(s) — Session #@_configResult.SessionId</p>
+                        @if (_configResult.BomLinkNote is not null)
+                        {
+                            <p class="hint">@_configResult.BomLinkNote</p>
+                        }
+                    </div>
+                    <table>
+                        <thead><tr><th>Code</th><th>Libellé</th></tr></thead>
+                        <tbody>
+                            @foreach (var a in _configResult.Articles)
+                            {
+                                <tr><td>@a.Code</td><td>@a.Label</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+            break;
+
+        case "categories":
+            <section class="card">
+                <h3>Catégories (@_categories.Count)</h3>
+                <table>
+                    <thead><tr><th>Code</th><th>Libellé</th></tr></thead>
+                    <tbody>
+                        @foreach (var cat in _categories)
+                        {
+                            <tr><td>@cat.Code</td><td>@cat.Label</td></tr>
+                        }
+                    </tbody>
+                </table>
+                <h4>Ajouter une catégorie</h4>
+                <div class="form-grid">
+                    <div><label>Code</label><input class="form-control" @bind="_newCategoryCode" /></div>
+                    <div><label>Libellé</label><input class="form-control" @bind="_newCategoryLabel" /></div>
+                </div>
+                <button class="btn-secondary" @onclick="CreateCategoryAsync" disabled="@_isBusy">Ajouter</button>
+
+                <h4 class="mt-3">Familles (@_families.Count)</h4>
+                <table>
+                    <thead><tr><th>Code</th><th>Libellé</th><th>Catégorie</th></tr></thead>
+                    <tbody>
+                        @foreach (var family in _families)
+                        {
+                            <tr><td>@family.Code</td><td>@family.Label</td><td>@family.CategoryLabel</td></tr>
+                        }
+                    </tbody>
+                </table>
+                <h4>Ajouter une famille</h4>
+                <div class="form-grid">
+                    <div><label>Code</label><input class="form-control" @bind="_newFamilyCode" /></div>
+                    <div><label>Libellé</label><input class="form-control" @bind="_newFamilyLabel" /></div>
+                    <div>
+                        <label>Catégorie</label>
+                        <select class="form-control" @bind="_newFamilyCategoryCode">
+                            @foreach (var cat in _categories)
+                            {
+                                <option value="@cat.Code">@cat.Label</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <button class="btn-secondary" @onclick="CreateFamilyAsync" disabled="@_isBusy">Ajouter</button>
+            </section>
+            break;
+
+        case "attributes":
+            <section class="card">
+                <h3>Attributs configurables</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th>Libellé</th>
+                            <th>Type</th>
+                            <th>Sélection</th>
+                            <th>Génératrice</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var attr in _attributes)
+                        {
+                            <tr>
+                                <td>@attr.Code</td>
+                                <td>@attr.Label</td>
+                                <td>@attr.ValueType</td>
+                                <td>@DisplayLabels.SelectionMode(attr.SelectionMode)</td>
+                                <td>@(attr.IsGenerator ? "Oui" : "Non")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <h4>Valeurs référentielles</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Attribut</th>
+                            <th>Affichage</th>
+                            <th>Normalisée</th>
+                            <th>Code technique</th>
+                            <th>Statut</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var opt in _options)
+                        {
+                            <tr>
+                                <td>@GetAttributeCode(opt.AttributeId)</td>
+                                <td>@opt.DisplayValue</td>
+                                <td>@opt.NormalizedValue</td>
+                                <td>@opt.TechnicalCode</td>
+                                <td>@DisplayLabels.OptionStatus(opt.Status)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <h4>Ajouter une valeur</h4>
+                <div class="form-grid">
+                    <div>
+                        <label>Attribut</label>
+                        <select class="form-control" @bind="_newOptionAttributeCode">
+                            @foreach (var attr in _attributes)
+                            {
+                                <option value="@attr.Code">@attr.Label</option>
+                            }
+                        </select>
+                    </div>
+                    <div><label>Valeur brute</label><input class="form-control" @bind="_newOptionRaw" /></div>
+                </div>
+                <button class="btn-secondary" @onclick="CreateOptionAsync" disabled="@_isBusy">Créer (statut À valider)</button>
+
+                <h4 class="mt-3">Test formatage</h4>
+                <div class="form-grid">
+                    <div>
+                        <label>Attribut</label>
+                        <select class="form-control" @bind="_formatAttributeCode">
+                            @foreach (var attr in _attributes)
+                            {
+                                <option value="@attr.Code">@attr.Code</option>
+                            }
+                        </select>
+                    </div>
+                    <div><label>Saisie brute</label><input class="form-control" @bind="_formatRaw" /></div>
+                </div>
+                <button class="btn-secondary" @onclick="TestFormatAsync" disabled="@_isBusy">Formater</button>
+                @if (_formatResult is not null)
+                {
+                    <dl class="info-list mt-3">
+                        <div><dt>Affichée</dt><dd>@_formatResult.DisplayValue</dd></div>
+                        <div><dt>Normalisée</dt><dd>@_formatResult.NormalizedValue</dd></div>
+                        <div><dt>Code technique</dt><dd>@_formatResult.TechnicalCode</dd></div>
+                    </dl>
+                }
+            </section>
+            break;
+
+        case "matrix":
+            <section class="card">
+                <h3>Matrice client × famille × attribut</h3>
+                <div class="form-grid">
+                    <div>
+                        <label>Client</label>
+                        <select class="form-control" @bind="_matrixCustomerCode" @bind:after="LoadMatrixAsync">
+                            @foreach (var customer in _customers)
+                            {
+                                <option value="@customer.Code">@customer.Label</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label>Famille</label>
+                        <select class="form-control" @bind="_matrixFamilyCode" @bind:after="LoadMatrixAsync">
+                            <option value="VIGNETTE_COMPOSITION">Vignette composition</option>
+                            @foreach (var family in _families)
+                            {
+                                <option value="@family.Code">@family.Label</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <p class="hint">Héritage : commande → client+saison → client → famille → attribut global (saison : À confirmer).</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Attribut</th>
+                            <th>Visible</th>
+                            <th>Obligatoire</th>
+                            <th>Multi</th>
+                            <th>Création</th>
+                            <th>Génératrice</th>
+                            <th>Rôle code</th>
+                            <th>Validation</th>
+                            <th>Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in _matrix)
+                        {
+                            <tr>
+                                <td>@row.AttributeLabel</td>
+                                <td>@(row.IsVisible ? "Oui" : "Non")</td>
+                                <td>@(row.IsRequired ? "Oui" : "Non")</td>
+                                <td>@(row.AllowsMultiSelect ? "Oui" : "Non")</td>
+                                <td>@(row.AllowsCreate ? "Oui" : "Non")</td>
+                                <td>@(row.IsGenerator ? "Oui" : "Non")</td>
+                                <td>@(row.RoleInCode ? "Oui" : "Non")</td>
+                                <td>@DisplayLabels.OptionStatus(row.ValidationStatus)</td>
+                                <td>@row.SourceLevel</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+            break;
+
+        case "bom":
+            <section class="card">
+                <h3>Lien BOM / Gammes</h3>
+                <p class="hint">Articles configurés ou dupliqués — lien avec nomenclatures et gammes du module Gammes &amp; Nomenclatures.</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Article</th>
+                            <th>Famille produit</th>
+                            <th>BOM base</th>
+                            <th>Gamme base</th>
+                            <th>Statut lien</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var link in _bomLinks)
+                        {
+                            <tr>
+                                <td>@link.ArticleCode</td>
+                                <td>@(link.ProductFamilyCode ?? "—")</td>
+                                <td>@(link.BomBaseCode ?? "—")</td>
+                                <td>@(link.RoutingBaseCode ?? "—")</td>
+                                <td>@link.LinkStatus</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (_bomLinks.Count == 0)
+                {
+                    <p>Aucun article configuré ou dupliqué pour le moment.</p>
+                }
+            </section>
+            break;
+
+        default:
+            <div class="alert alert-warning">Section inconnue. <a href="/articles">Retour à la liste</a>.</div>
+            break;
+    }
+}
+
+@code {
+    [Parameter] public string? Section { get; set; }
+
+    private static readonly HashSet<string> ValidSections =
+    [
+        "manual", "configured", "categories", "attributes", "matrix", "bom"
+    ];
+
+    private string EffectiveSection =>
+        string.IsNullOrWhiteSpace(Section) ? "list" : Section.ToLowerInvariant();
+
+    private bool IsSubSection => ValidSections.Contains(EffectiveSection);
+
+    private bool _isLoading = true;
+    private bool _isBusy;
+    private string? _loadError;
+    private string? _message;
+    private bool _isError;
+
+    private List<ArticleListItem> _articles = [];
+    private List<CategoryItem> _categories = [];
+    private List<FamilyItem> _families = [];
+    private List<CustomerItem> _customers = [];
+    private List<AttributeDefinitionItem> _attributes = [];
+    private List<AttributeOptionItem> _options = [];
+    private List<CustomerMatrixAttributeItem> _matrix = [];
+    private List<TraceabilityItem> _traces = [];
+    private List<BomLinkInfo> _bomLinks = [];
+
+    private string _searchText = string.Empty;
+    private int? _selectedArticleId;
+    private ArticleListItem? _selectedArticle;
+    private int? _dupEditingId;
+    private string _dupNewCode = "";
+
+    private const int MaxVisibleArticles = 200;
+
+    private List<ArticleListItem> FilteredArticles => FilterArticles(_articles, _searchText);
+
+    private List<ArticleListItem> DisplayedArticles
+    {
+        get
+        {
+            var filtered = FilteredArticles;
+            if (!string.IsNullOrWhiteSpace(_searchText) || filtered.Count <= MaxVisibleArticles)
+            {
+                return filtered;
+            }
+
+            return filtered.Take(MaxVisibleArticles).ToList();
+        }
+    }
+
+    private List<TraceabilityItem> SelectedTraces =>
+        _selectedArticle is null ? [] : GetTracesForArticle(_selectedArticle);
+    private BomLinkInfo? SelectedBomLink =>
+        _selectedArticle is null
+            ? null
+            : _bomLinks.FirstOrDefault(l => string.Equals(l.ArticleCode, _selectedArticle.Code, StringComparison.OrdinalIgnoreCase));
+
+    private string _manualCode = "";
+    private string _manualLabel = "";
+    private string _manualFamilyCode = "PULL";
+    private string _manualArticleType = "COMPONENT";
+    private string _manualUnit = "PIECE";
+
+    private string _configCustomerCode = "CLIENT_A";
+    private string _configOrderCode = "BC0001";
+    private string _configFinishedGoodCode = "PULL123";
+    private string _configComposition = "70% laine / 30% acrylique";
+    private string _configCareCode = "LAV30-SECHNON";
+    private bool _configLanguageIsGenerator;
+    private readonly List<string> _availableSizes = ["S", "M", "L", "XXL"];
+    private readonly List<string> _availableColors = ["Bleu marine", "Vert sauge", "Mint", "Noir"];
+    private readonly List<string> _availableLanguages = ["FR", "EN"];
+    private readonly HashSet<string> _selectedSizes = ["S", "M", "XXL"];
+    private readonly HashSet<string> _selectedColors = ["Bleu marine", "Vert sauge"];
+    private readonly HashSet<string> _selectedLanguages = ["FR"];
+    private ConfigureArticlesResult? _configResult;
+
+    private string _newCategoryCode = "";
+    private string _newCategoryLabel = "";
+    private string _newFamilyCode = "";
+    private string _newFamilyLabel = "";
+    private string _newFamilyCategoryCode = "LABELING";
+
+    private string _newOptionAttributeCode = "COLOR";
+    private string _newOptionRaw = "";
+    private string _formatAttributeCode = "COLOR";
+    private string _formatRaw = "";
+    private FormatValueResult? _formatResult;
+
+    private string _matrixCustomerCode = "CLIENT_A";
+    private string _matrixFamilyCode = "VIGNETTE_COMPOSITION";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await ReloadDataAsync();
+            await LoadMatrixAsync();
+            await OnConfigCustomerChanged();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private static List<ArticleListItem> FilterArticles(IReadOnlyList<ArticleListItem> articles, string searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return articles.ToList();
+        }
+
+        var terms = searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return articles
+            .Where(article => terms.All(term => MatchesArticle(article, term)))
+            .ToList();
+    }
+
+    private static bool MatchesArticle(ArticleListItem article, string term)
+    {
+        var comparison = StringComparison.OrdinalIgnoreCase;
+        return article.Code.Contains(term, comparison)
+            || article.Label.Contains(term, comparison)
+            || article.FamilyLabel.Contains(term, comparison)
+            || article.FamilyCode.Contains(term, comparison)
+            || article.ArticleType.Contains(term, comparison)
+            || article.CreationMode.Contains(term, comparison)
+            || DisplayLabels.ArticleType(article.ArticleType).Contains(term, comparison)
+            || DisplayLabels.CreationMode(article.CreationMode).Contains(term, comparison)
+            || (article.CustomerCode?.Contains(term, comparison) ?? false)
+            || (article.SourceArticleCode?.Contains(term, comparison) ?? false);
+    }
+
+    private void SelectArticle(ArticleListItem article)
+    {
+        _selectedArticleId = article.Id;
+        _selectedArticle = article;
+        _dupEditingId = null;
+    }
+
+    private void ClearSelection()
+    {
+        _selectedArticleId = null;
+        _selectedArticle = null;
+    }
+
+    private void StartDuplicate(ArticleListItem article)
+    {
+        _dupEditingId = article.Id;
+        _dupNewCode = $"{article.Code}_COPY";
+        _selectedArticleId = article.Id;
+        _selectedArticle = article;
+    }
+
+    private void CancelDuplicate()
+    {
+        _dupEditingId = null;
+        _dupNewCode = "";
+    }
+
+    private List<TraceabilityItem> GetTracesForArticle(ArticleListItem article)
+    {
+        return _traces
+            .Where(trace => MatchesTrace(article, trace))
+            .OrderByDescending(trace => trace.CreatedAt)
+            .ToList();
+    }
+
+    private static bool MatchesTrace(ArticleListItem article, TraceabilityItem trace)
+    {
+        if (trace.TraceType == "CONFIGURATION"
+            && article.ConfigurationSessionId is int configSessionId
+            && trace.SessionId == configSessionId)
+        {
+            return true;
+        }
+
+        if (trace.TraceType == "DUPLICATION")
+        {
+            if (article.DuplicationSessionId is int dupSessionId && trace.SessionId == dupSessionId)
+            {
+                return true;
+            }
+
+            if (string.Equals(trace.NewArticleCode, article.Code, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(trace.SourceArticleCode, article.Code, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task ReloadDataAsync()
+    {
+        _articles = (await ArticleService.GetArticlesAsync()).ToList();
+        _categories = (await ArticleService.GetCategoriesAsync()).ToList();
+        _families = (await ArticleService.GetFamiliesAsync()).ToList();
+        _customers = (await ArticleService.GetCustomersAsync()).ToList();
+        _attributes = (await ArticleService.GetAttributeDefinitionsAsync()).ToList();
+        _options = (await ArticleService.GetAttributeOptionsAsync()).ToList();
+        _traces = (await ArticleService.GetTraceabilityAsync()).ToList();
+        _bomLinks = (await ArticleService.GetBomLinksAsync()).ToList();
+
+        if (_selectedArticleId is int selectedId)
+        {
+            _selectedArticle = _articles.FirstOrDefault(a => a.Id == selectedId);
+        }
+    }
+
+    private async Task LoadMatrixAsync()
+    {
+        _matrix = (await ArticleService.GetCustomerMatrixAsync(_matrixCustomerCode, _matrixFamilyCode)).ToList();
+    }
+
+    private async Task OnConfigCustomerChanged()
+    {
+        var matrix = await ArticleService.GetCustomerMatrixAsync(_configCustomerCode, "VIGNETTE_COMPOSITION");
+        _configLanguageIsGenerator = matrix.FirstOrDefault(m => m.AttributeCode == "LANGUAGE")?.IsGenerator ?? false;
+    }
+
+    private void ToggleSize(string size, bool selected)
+    {
+        if (selected) _selectedSizes.Add(size); else _selectedSizes.Remove(size);
+    }
+
+    private void ToggleColor(string color, bool selected)
+    {
+        if (selected) _selectedColors.Add(color); else _selectedColors.Remove(color);
+    }
+
+    private void ToggleLanguage(string lang, bool selected)
+    {
+        if (selected) _selectedLanguages.Add(lang); else _selectedLanguages.Remove(lang);
+    }
+
+    private string GetAttributeCode(int attributeId)
+        => _attributes.FirstOrDefault(a => a.Id == attributeId)?.Code ?? attributeId.ToString();
+
+    private async Task CreateManualAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            var article = await ArticleService.CreateManualArticleAsync(new CreateManualArticleRequest(
+                _manualCode, _manualLabel, _manualFamilyCode, _manualArticleType, _manualUnit));
+            _message = $"Article {article.Code} créé.";
+            await ReloadDataAsync();
+        });
+    }
+
+    private async Task ConfigureArticlesAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            _configResult = await ArticleService.ConfigureArticlesAsync(new ConfigureArticlesRequest(
+                _configCustomerCode,
+                "VIGNETTE_COMPOSITION",
+                _configFinishedGoodCode,
+                _selectedSizes.ToList(),
+                _selectedColors.ToList(),
+                _configComposition,
+                _configCareCode,
+                _configLanguageIsGenerator ? _selectedLanguages.ToList() : null,
+                _configOrderCode));
+            _message = $"{_configResult.GeneratedCount} vignette(s) générée(s).";
+            await ReloadDataAsync();
+        });
+    }
+
+    private async Task DuplicateFromRowAsync(ArticleListItem article)
+    {
+        if (string.IsNullOrWhiteSpace(_dupNewCode))
+        {
+            _message = "Indiquez un nouveau code.";
+            _isError = true;
+            return;
+        }
+
+        await RunActionAsync(async () =>
+        {
+            var result = await ArticleService.DuplicateArticleAsync(new DuplicateArticleRequest(
+                article.Id, _dupNewCode.Trim(), null, false, false));
+            _message = $"Article {result.Article.Code} dupliqué (session #{result.SessionId}).";
+            if (result.BomLinkNote is not null)
+            {
+                _message += " " + result.BomLinkNote;
+            }
+
+            _dupEditingId = null;
+            _dupNewCode = "";
+            await ReloadDataAsync();
+            _selectedArticleId = result.Article.Id;
+            _selectedArticle = _articles.FirstOrDefault(a => a.Id == result.Article.Id);
+        });
+    }
+
+    private async Task CreateCategoryAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ArticleService.CreateCategoryAsync(new CreateCategoryRequest(_newCategoryCode, _newCategoryLabel));
+            _message = "Catégorie ajoutée.";
+            await ReloadDataAsync();
+        });
+    }
+
+    private async Task CreateFamilyAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ArticleService.CreateFamilyAsync(new CreateFamilyRequest(_newFamilyCode, _newFamilyLabel, _newFamilyCategoryCode));
+            _message = "Famille ajoutée.";
+            await ReloadDataAsync();
+        });
+    }
+
+    private async Task CreateOptionAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ArticleService.CreateAttributeOptionAsync(new CreateAttributeOptionRequest(_newOptionAttributeCode, _newOptionRaw));
+            _message = "Valeur créée avec statut À valider.";
+            _options = (await ArticleService.GetAttributeOptionsAsync()).ToList();
+        });
+    }
+
+    private async Task TestFormatAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            _formatResult = await ArticleService.FormatValueAsync(new FormatValueRequest(_formatAttributeCode, _formatRaw));
+        });
+    }
+
+    private async Task RunActionAsync(Func<Task> action)
+    {
+        _message = null;
+        _isError = false;
+        _isBusy = true;
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+}

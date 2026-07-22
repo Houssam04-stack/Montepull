@@ -1,0 +1,19 @@
+PROFILE_STATUSES = {
+    "DRAFT",
+    "TO_VALIDATE",
+    "VALIDATED",
+    "BLOCKED",
+    "OBSOLETE",
+}
+
+GENERATED_OBJECT_STATUSES = {
+    "DRAFT",
+    "GENERATED",
+    "GENERATED_WITH_WARNINGS",
+    "TO_COMPLETE",
+    "TO_VALIDATE",
+    "VALIDATED",
+    "OBSOLETE",
+    "ERROR",
+}
+

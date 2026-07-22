@@ -1,0 +1,66 @@
+@page "/cbn/simulation"
+@page "/cbn/aps"
+@rendermode InteractiveServer
+
+<PageTitle>CBN — Calcul des besoins</PageTitle>
+
+<PageHeader Title="CBN — Calcul des besoins"
+            Description="Trois contextes métier, un seul point d'entrée. Les moteurs et données restent distincts." />
+
+<SectionTabs Tabs="@_tabs" ActiveHref="@ActiveHref" AriaLabel="Modes CBN" />
+
+@switch (EffectiveMode)
+{
+    case "simulation":
+        <AlertPanel Variant="info" Title="Simulation et traçabilité">
+            Ouvrez Simulation MRP pour créer une simulation, lancer le CBN et consulter l'historique des runs avec traçabilité détaillée.
+        </AlertPanel>
+        <section class="card">
+            <a class="btn-primary" href="/simulation-mrp">Ouvrir Simulation MRP → onglet CBN</a>
+        </section>
+        break;
+    case "aps":
+        <AlertPanel Variant="warning" Title="Calcul APS avancé">
+            CBN par segments APS — données souvent en mode démonstration.
+        </AlertPanel>
+        <section class="card">
+            <a class="btn-primary" href="/aps/cbn">Ouvrir CBN segments APS</a>
+        </section>
+        break;
+    default:
+        <AlertPanel Variant="success" Title="Calcul métier / données réelles">
+            CBN legacy sur commandes clients et nomenclatures du référentiel principal.
+        </AlertPanel>
+        <section class="card">
+            <a class="btn-primary" href="/cbn">Lancer le calcul métier</a>
+        </section>
+        break;
+}
+
+@code {
+    private static readonly SectionTabItem[] _tabs =
+    [
+        new("Données réelles", "/cbn"),        new("Simulation et traçabilité", "/cbn/simulation"),
+        new("APS avancé", "/cbn/aps")
+    ];
+
+    private string EffectiveMode
+    {
+        get
+        {
+            var path = new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant();
+            if (path.EndsWith("/simulation", StringComparison.Ordinal)) return "simulation";
+            if (path.EndsWith("/aps", StringComparison.Ordinal)) return "aps";
+            return "metier";
+        }
+    }
+
+    private string ActiveHref => EffectiveMode switch
+    {
+        "simulation" => "/cbn/simulation",
+        "aps" => "/cbn/aps",
+        _ => "/cbn"
+    };
+
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+}

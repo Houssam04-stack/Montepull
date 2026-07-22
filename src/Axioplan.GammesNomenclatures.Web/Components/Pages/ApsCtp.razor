@@ -1,0 +1,195 @@
+@page "/aps/ctp"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Ctp
+@inject ApsCtpService CtpService
+
+<PageTitle>APS CTP</PageTitle>
+
+<h2>APS — CTP déterministe</h2>
+<p class="hint">Évaluer = sans réservation. Promettre = transaction atomique. Sans solveur.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_info))
+{
+    <div class="alert alert-success">@_info</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Scénario demo</label>
+            <select class="form-control" @bind="_scenario">
+                <option value="R1">R1 — stock PF</option>
+                <option value="R2">R2 — fil + capacité</option>
+                <option value="R2_ST">R2 — sous-traitance</option>
+                <option value="R3">R3 — achat fil</option>
+                <option value="AUTRE_DATE">Autre date</option>
+                <option value="INFAISABLE">Infaisable</option>
+            </select>
+        </div>
+        <div>
+            <label>Article</label>
+            <input class="form-control" @bind="_article" />
+        </div>
+        <div>
+            <label>Client</label>
+            <input class="form-control" @bind="_customer" />
+        </div>
+        <div>
+            <label>Quantité</label>
+            <input type="number" class="form-control" @bind="_qty" />
+        </div>
+        <div>
+            <label>Date souhaitée</label>
+            <input type="date" class="form-control" @bind="_desired" />
+        </div>
+        <div>
+            <label>Date max client</label>
+            <input type="date" class="form-control" @bind="_max" />
+        </div>
+        <div>
+            <label>Marge</label>
+            <input type="number" class="form-control" @bind="_margin" />
+        </div>
+        <div>
+            <label>Régime déclaré (optionnel)</label>
+            <select class="form-control" @bind="_regime">
+                <option value="">(défauts hiérarchiques)</option>
+                <option value="MTS">MTS</option>
+                <option value="MTO">MTO</option>
+            </select>
+        </div>
+        <div style="align-self:end; display:flex; gap:0.5rem; flex-wrap:wrap">
+            <button class="btn-secondary" @onclick="EvaluateAsync" disabled="@_busy">Évaluer</button>
+            <button class="btn-primary" @onclick="PromiseAsync" disabled="@_busy">Promettre</button>
+            <button class="btn-secondary" @onclick="RejectAsync" disabled="@_busy">Refuser</button>
+        </div>
+    </div>
+</section>
+
+@if (_result is not null)
+{
+    var a = _result.Answer;
+    <section class="card">
+        <h3>7 champs CTP — @a.Outcome @(_result.IsEvaluationOnly ? "(évaluation)" : "(promesse)")</h3>
+        <table>
+            <thead>
+                <tr><th>Date</th><th>Régime</th><th>Goulot</th><th>Fiabilité</th><th>HRE</th><th>Densité</th><th>Float</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>@(a.ProposedDate?.ToString() ?? "—")</td>
+                    <td>@a.EffectiveRegime</td>
+                    <td>@a.Bottleneck</td>
+                    <td>@(a.Reliability.Value?.ToString("F2") ?? a.Reliability.Status)</td>
+                    <td>@(a.Hre?.ToString("F3") ?? a.HreStatus)</td>
+                    <td>@(a.MarginDensity?.ToString("F3") ?? a.DensityStatus)</td>
+                    <td>@(a.FloatDays?.ToString() ?? "—") (@a.FloatStatus)</td>
+                </tr>
+            </tbody>
+        </table>
+        <p>Circuit : <strong>@(a.CircuitCode ?? "—")</strong> —
+           Bain : <strong>@(a.SelectedBath ?? "—")</strong> —
+           Eng. externe : <strong>@(a.ExternalEngagementCode ?? "—")</strong></p>
+        <p>Réservations : <strong>@(a.ReservesCreated ? "oui" : "non")</strong> —
+           Temps : <strong>@_result.ElapsedMs ms</strong></p>
+        <p>@a.Cause.Explanation</p>
+        <p class="hint">Contrainte @a.Cause.ConstraintType / @a.Cause.ResourceOrMaterial —
+           charge @a.Cause.Charge / capa @a.Cause.Capacity / manque @a.Cause.Shortage</p>
+        @if (a.EscalateToM2Recommendation is not null)
+        {
+            <div class="alert alert-warning">@a.EscalateToM2Recommendation</div>
+        }
+    </section>
+
+    <section class="card">
+        <h3>Options testées</h3>
+        <ul>@foreach (var o in a.OptionsTried) { <li>@o</li> }</ul>
+        <h3>Chronologie horizons</h3>
+        <table>
+            <thead><tr><th>Date</th><th>OK</th><th>Raison</th><th>Goulot</th></tr></thead>
+            <tbody>
+            @foreach (var h in a.HorizonChronology.Take(20))
+            {
+                <tr>
+                    <td>@h.HorizonDate</td>
+                    <td>@(h.Passed ? "oui" : "non")</td>
+                    <td>@h.Reason</td>
+                    <td>@(h.Bottleneck ?? "—")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <p><a href="/aps/promesses">Historique promesses →</a></p>
+    </section>
+}
+
+@code {
+    private string _scenario = "R2";
+    private string _article = "DEMO_PF";
+    private string _customer = "CLI-STD";
+    private double _qty = 50;
+    private DateOnly _desired = DateOnly.FromDateTime(DateTime.Today.AddDays(14));
+    private DateOnly? _max = DateOnly.FromDateTime(DateTime.Today.AddDays(45));
+    private double _margin = 1200;
+    private string _regime = "";
+    private ApsCtpEvaluateResultDto? _result;
+    private string? _error;
+    private string? _info;
+    private bool _busy;
+
+    private ApsCtpEvaluateRequest Req() => new(
+        _article, _customer, _qty, _desired, _max, _margin, 5,
+        string.IsNullOrWhiteSpace(_regime) ? null : _regime,
+        OrderReference: "UI-" + _scenario,
+        Scenario: _scenario,
+        ArticleCategory: "PULL",
+        CustomerCategory: _customer.Contains("MTS") ? "STD" : "STD");
+
+    private async Task EvaluateAsync()
+    {
+        _busy = true; _error = null; _info = null;
+        try
+        {
+            if (_scenario == "R1") _customer = "CLI-MTS";
+            _result = await CtpService.EvaluateAsync(Req());
+            _info = "Évaluation seule — aucune réservation.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task PromiseAsync()
+    {
+        _busy = true; _error = null; _info = null;
+        try
+        {
+            if (_scenario == "R1") _customer = "CLI-MTS";
+            var (res, err) = await CtpService.PromiseAsync(Req());
+            _result = res;
+            if (err is not null) _error = err;
+            else _info = res.Answer.Outcome == ApsCtpOutcomes.Infeasible
+                ? "Infaisable — événements journalisés."
+                : "Promesse réservée atomiquement.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task RejectAsync()
+    {
+        _busy = true;
+        try
+        {
+            await CtpService.RejectAsync(Req());
+            _info = "PromesseRefusee journalisée (manuel).";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

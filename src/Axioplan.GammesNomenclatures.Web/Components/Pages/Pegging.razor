@@ -1,0 +1,339 @@
+@page "/pegging"
+@rendermode InteractiveServer
+@inject PeggingService PeggingService
+@inject ICbnApplicationService CbnApplication
+
+<PageTitle>Pegging</PageTitle>
+
+<h2>Pegging des besoins</h2>
+<p class="lead">Liens OV / OF / OA / stock vers besoins CBN. Regles d'allocation : A confirmer avec le metier.</p>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <p>Chargement...</p>
+}
+else
+{
+    <section class="card">
+        <h3>Lancer le pegging</h3>
+        <div class="form-grid">
+            <div>
+                <label for="cbnRun">Run CBN</label>
+                <select id="cbnRun" class="form-control" @bind="_selectedCbnRunId" @bind:after="OnCbnRunChangedAsync">
+                    @foreach (var run in _cbnRuns)
+                    {
+                        <option value="@run.Id">#@run.Id — @run.SalesOrderCode / @run.FamilyCode (@run.CreatedAt.ToLocalTime().ToString("g"))</option>
+                    }
+                </select>
+            </div>
+        </div>
+        <button class="btn-primary mt-3" @onclick="RunPeggingAsync" disabled="@_isRunning">
+            @(_isRunning ? "Calcul..." : "Calculer le pegging")
+        </button>
+        @if (!string.IsNullOrWhiteSpace(_runError))
+        {
+            <div class="alert alert-warning mt-3">@_runError</div>
+        }
+    </section>
+
+    @if (_result is not null)
+    {
+        <section class="card summary-banner">
+            <h3>Pegging #@_result.PeggingRunId (v@_result.VersionNo)</h3>
+            <div class="summary-stats">
+                <div class="stat">
+                    <span class="stat-value">@_result.Links.Count</span>
+                    <span class="stat-label">liens</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.Coverage.Count(item => item.CoverageStatus == "COMPLETE")</span>
+                    <span class="stat-label">besoins couverts</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.Coverage.Count(item => item.RemainingToCover > 0.0001)</span>
+                    <span class="stat-label">besoins restants</span>
+                </div>
+            </div>
+            <p class="hint">CBN run @_result.CbnRunId — ordre de couverture V1 : stock → OF → OA. Politiques MTS/MTO detaillees : A confirmer.</p>
+        </section>
+
+        @RenderCoverageSection(_result.Coverage)
+        @RenderSupplySection(_result.SupplyUsage)
+
+        <section class="card">
+            <h3>Visualisation des liens</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Direction</th>
+                        <th>Source</th>
+                        <th></th>
+                        <th>Cible</th>
+                        <th class="num">Quantite</th>
+                        <th>Chemin</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var link in _result.Links)
+                    {
+                        <tr>
+                            <td>@link.LinkType</td>
+                            <td>@link.Direction</td>
+                            <td>@link.SourceLabel</td>
+                            <td class="link-arrow">→</td>
+                            <td>@link.TargetLabel</td>
+                            <td class="num">@link.Quantity.ToString("F3") @DisplayLabels.Unit(link.Unit)</td>
+                            <td class="hint">@(link.SourcePath ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        @RenderHistorySection(_result.History)
+    }
+
+    @if (_existingLinks.Count > 0 && _result is null)
+    {
+        @RenderCoverageSection(_existingCoverage)
+        @RenderSupplySection(_existingSupplyUsage)
+
+        <section class="card">
+            <h3>Liens existants (CBN #@_selectedCbnRunId)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Direction</th>
+                        <th>Source</th>
+                        <th>Cible</th>
+                        <th class="num">Quantite</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var link in _existingLinks)
+                    {
+                        <tr>
+                            <td>@link.LinkType</td>
+                            <td>@link.Direction</td>
+                            <td>@link.SourceLabel</td>
+                            <td>@link.TargetLabel</td>
+                            <td class="num">@link.Quantity.ToString("F3") @DisplayLabels.Unit(link.Unit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        @RenderHistorySection(_existingHistory)
+    }
+}
+
+@code {
+    private IReadOnlyList<CbnRunListItem> _cbnRuns = [];
+    private IReadOnlyList<PeggingLinkRow> _existingLinks = [];
+    private IReadOnlyList<PeggingCoverageRow> _existingCoverage = [];
+    private IReadOnlyList<PeggingSupplyUsageRow> _existingSupplyUsage = [];
+    private IReadOnlyList<PeggingLinkHistoryRow> _existingHistory = [];
+    private int _selectedCbnRunId;
+    private bool _isLoading = true;
+    private bool _isRunning;
+    private string? _loadError;
+    private string? _runError;
+    private PeggingRunResult? _result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _cbnRuns = await CbnApplication.ListRealRunsAsync();
+            if (_cbnRuns.Count == 0)
+            {
+                _loadError = "Aucun run CBN. Lancez d'abord un calcul sur /cbn.";
+                return;
+            }
+
+            _selectedCbnRunId = _cbnRuns[0].Id;
+            await LoadExistingLinksAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadExistingLinksAsync()
+    {
+        _existingLinks = await PeggingService.GetLinksForCbnRunAsync(_selectedCbnRunId);
+        _existingCoverage = await PeggingService.GetCoverageForCbnRunAsync(_selectedCbnRunId);
+        _existingSupplyUsage = await PeggingService.GetSupplyUsageForCbnRunAsync(_selectedCbnRunId);
+        _existingHistory = await PeggingService.GetHistoryForCbnRunAsync(_selectedCbnRunId);
+    }
+
+    private async Task OnCbnRunChangedAsync()
+    {
+        _result = null;
+        await LoadExistingLinksAsync();
+    }
+
+    private async Task RunPeggingAsync()
+    {
+        _runError = null;
+        _isRunning = true;
+        try
+        {
+            _result = await PeggingService.RunPeggingAsync(new PeggingRunRequest(_selectedCbnRunId));
+            _existingLinks = _result.Links;
+            _existingCoverage = _result.Coverage;
+            _existingSupplyUsage = _result.SupplyUsage;
+            _existingHistory = _result.History;
+        }
+        catch (Exception ex)
+        {
+            _runError = ex.Message;
+            _result = null;
+        }
+        finally
+        {
+            _isRunning = false;
+        }
+    }
+
+    private RenderFragment RenderCoverageSection(IReadOnlyList<PeggingCoverageRow> coverage) => builder =>
+    {
+        if (coverage.Count == 0)
+        {
+            return;
+        }
+
+        builder.OpenElement(0, "section");
+        builder.AddAttribute(1, "class", "card");
+        builder.OpenElement(2, "h3");
+        builder.AddContent(3, "Couverture des besoins");
+        builder.CloseElement();
+        builder.OpenElement(4, "table");
+        builder.OpenElement(5, "thead");
+        builder.OpenElement(6, "tr");
+        foreach (var header in new[] { "Variante", "Composant", "Type", "Statut", "Besoin", "Stock", "OF", "OA", "Reste a couvrir", "Source BOM" })
+        {
+            builder.OpenElement(7, "th");
+            builder.AddContent(8, header);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(9, "tbody");
+        var seq = 10;
+        foreach (var row in coverage)
+        {
+            builder.OpenElement(seq++, "tr");
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.VariantLabel); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.ComponentLabel); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, DisplayLabels.ArticleType(row.ComponentType)); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.CoverageStatus); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, $"{row.RequiredQuantity:F3} {DisplayLabels.Unit(row.Unit)}"); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.CoveredByStock.ToString("F3")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.CoveredByManufacturing.ToString("F3")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.CoveredByPurchase.ToString("F3")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.RemainingToCover.ToString("F3")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.SourcePath); builder.CloseElement();
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderSupplySection(IReadOnlyList<PeggingSupplyUsageRow> supplyUsage) => builder =>
+    {
+        if (supplyUsage.Count == 0)
+        {
+            return;
+        }
+
+        builder.OpenElement(0, "section");
+        builder.AddAttribute(1, "class", "card");
+        builder.OpenElement(2, "h3");
+        builder.AddContent(3, "Disponibilites et allocations");
+        builder.CloseElement();
+        builder.OpenElement(4, "table");
+        builder.OpenElement(5, "thead");
+        builder.OpenElement(6, "tr");
+        foreach (var header in new[] { "Type source", "Source", "Composant", "Statut", "Disponible", "Pegge", "Reste" })
+        {
+            builder.OpenElement(7, "th");
+            builder.AddContent(8, header);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(9, "tbody");
+        var seq = 10;
+        foreach (var row in supplyUsage)
+        {
+            builder.OpenElement(seq++, "tr");
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.SupplyEntityType); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.SupplyLabel); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.ComponentCode); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.UsageStatus); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, $"{row.AvailableQuantity:F3} {DisplayLabels.Unit(row.Unit)}"); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.PeggedQuantity.ToString("F3")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.RemainingQuantity.ToString("F3")); builder.CloseElement();
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderHistorySection(IReadOnlyList<PeggingLinkHistoryRow> history) => builder =>
+    {
+        if (history.Count == 0)
+        {
+            return;
+        }
+
+        builder.OpenElement(0, "section");
+        builder.AddAttribute(1, "class", "card");
+        builder.OpenElement(2, "h3");
+        builder.AddContent(3, "Historique des liens");
+        builder.CloseElement();
+        builder.OpenElement(4, "table");
+        builder.OpenElement(5, "thead");
+        builder.OpenElement(6, "tr");
+        foreach (var header in new[] { "Run pegging", "Version run", "Lien", "Version lien", "Quantite", "Motif", "Horodatage" })
+        {
+            builder.OpenElement(7, "th");
+            builder.AddContent(8, header);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(9, "tbody");
+        var seq = 10;
+        foreach (var row in history)
+        {
+            builder.OpenElement(seq++, "tr");
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.PeggingRunId); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.PeggingRunVersionNo); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.LinkId); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.VersionNo); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "class", "num"); builder.AddContent(seq++, row.Quantity.ToString("F3")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.ChangeReason ?? "—"); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddContent(seq++, row.ChangedAt.ToLocalTime().ToString("g")); builder.CloseElement();
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+}

@@ -1,0 +1,25 @@
+@page "/aps/plan-hebdo"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@inject ApsContractService ContractService
+
+<PageTitle>APS Plan hebdo</PageTitle>
+<h2>APS — Plan hebdomadaire</h2>
+<p class="hint">Grain SEMAINE (I-grain). Contrat + HRE + composition + fenêtre.</p>
+@if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+<section class="card">
+    <ul>
+    @foreach (var p in _plans)
+    {
+        <li><strong>@p.RoleOrPost</strong> @p.Start — <code>@p.PlanRef</code><br/><pre>@p.PayloadJson</pre></li>
+    }
+    </ul>
+</section>
+@code {
+    private List<(string Grain, string RoleOrPost, DateOnly Start, string PayloadJson, string PlanRef)> _plans = [];
+    private string? _error;
+    protected override async Task OnInitializedAsync() {
+        try { await ContractService.EnsureReadyAsync(); _plans = (await ContractService.ListPlansAsync("SEMAINE")).ToList(); }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+}

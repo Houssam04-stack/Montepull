@@ -1,0 +1,119 @@
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@inject ApsFluxService FluxService
+
+@if (ShowPageHeader)
+{
+    <h2>Charge calculée</h2>
+    <p class="hint">Détail des charges par bucket et runs publiés.</p>
+}
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Du</label>
+            <input type="date" class="form-control" @bind="_from" />
+        </div>
+        <div>
+            <label>Au</label>
+            <input type="date" class="form-control" @bind="_to" />
+        </div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="LoadAsync" disabled="@_busy">Calculer charges</button>
+        </div>
+    </div>
+</section>
+
+@if (_result is not null)
+{
+    <section class="card">
+        <h3>Charges par bucket</h3>
+        <table>
+            <thead>
+                <tr><th>Ressource</th><th>Type</th><th>Unite</th><th>Bucket</th><th>Qte</th><th>t.u.</th><th>Setup</th><th>Charge</th><th>Traces</th></tr>
+            </thead>
+            <tbody>
+            @foreach (var l in _result.Loads)
+            {
+                <tr>
+                    <td>@l.ResourceCode</td>
+                    <td>@l.CapacityType</td>
+                    <td>@l.Unit</td>
+                    <td>@l.BucketDate</td>
+                    <td>@l.QtyToLaunch.ToString("F2")</td>
+                    <td>@l.UnitTime.ToString("F4")</td>
+                    <td>@l.SetupProvision.ToString("F4")</td>
+                    <td>@l.Charge.ToString("F4")</td>
+                    <td><small>@string.Join(" · ", l.Traces)</small></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}
+
+<section class="card">
+    <h3>Runs publies</h3>
+    <table>
+        <thead><tr><th>Id</th><th>Fenetre</th><th>Goulot</th><th>Cree</th></tr></thead>
+        <tbody>
+        @foreach (var r in _runs)
+        {
+            <tr>
+                <td>@r.Id</td>
+                <td>@r.From → @r.To</td>
+                <td>@(r.BottleneckCode ?? "—")</td>
+                <td>@r.CreatedAtUtc.ToLocalTime()</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    [Parameter] public bool ShowPageHeader { get; set; } = true;
+
+    private DateOnly _from = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly _to = DateOnly.FromDateTime(DateTime.Today);
+    private ApsFluxComputeResultDto? _result;
+    private List<ApsLoadRunSummaryDto> _runs = [];
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await FluxService.EnsureReadyAsync();
+            _runs = (await FluxService.ListLoadRunsAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _result = await FluxService.ComputeAsync(new ApsFluxWindowRequest(_from, _to, Publish: false));
+            _runs = (await FluxService.ListLoadRunsAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

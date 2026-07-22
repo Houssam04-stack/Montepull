@@ -1,0 +1,180 @@
+@page "/mvp0/workflow/{CampaignId:guid}"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Mvp0
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Mvp0
+@inject Mvp0WorkflowService Workflow
+
+<PageTitle>MVP-0 Parcours</PageTitle>
+
+@if (_state is null)
+{
+    <p>Chargement…</p>
+}
+else
+{
+    <div class="alert" style="background:#fff7ed;border:1px solid #fdba74;padding:0.6rem;margin-bottom:1rem">
+        Parcours guidé MVP-0 — pas d’ordonnancement, pas de CTP, pas de solveur.
+    </div>
+
+    <h2>@_state.Campaign.Code — @_state.Campaign.FamilyCode</h2>
+    <p>Statut <strong>@_state.Campaign.Status</strong> · Provenance <strong>@_state.Campaign.Provenance</strong> · Étape <strong>@_state.CurrentStep</strong></p>
+
+    <div class="mvp0-steps">
+        @foreach (var s in Mvp0WorkflowService.Steps)
+        {
+            <span class="mvp0-step @( _state.CompletedSteps.Contains(s) ? "done" : null) @( _state.CurrentStep==s ? "current" : null)">@s</span>
+        }
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error)) { <div class="alert alert-danger">@_error</div> }
+    @if (!string.IsNullOrEmpty(_info)) { <div class="alert alert-success">@_info</div> }
+
+    <section class="card">
+        <h3>Actions d’étape</h3>
+        <button class="btn-secondary" @onclick="ImportAsync" disabled="@_busy">2. Import seed anomalies</button>
+        <button class="btn-secondary" @onclick="ImportCleanAsync" disabled="@_busy">2b. Import seed REAL propre</button>
+        <a class="btn-secondary" href="/mvp0/imports">Assistant CSV</a>
+        <button class="btn-secondary" @onclick="ValidateAsync" disabled="@_busy">3. Validation</button>
+        <button class="btn-secondary" @onclick="BypassAllBlockingAsync" disabled="@_busy">4. By-pass bloquants (tracé)</button>
+        <button class="btn-secondary" @onclick="InputScoreAsync" disabled="@_busy">5. Score intrant</button>
+        <button class="btn-secondary" @onclick="BacktestAsync" disabled="@_busy">6–7. Backtest + score résultat</button>
+        <div class="form-grid" style="margin-top:0.75rem">
+            <div><label>Planificateur</label><input class="form-control" @bind="_planner" /></div>
+            <div><label>Avis</label><input class="form-control" @bind="_comment" /></div>
+            <div><label><input type="checkbox" @bind="_approved" /> Approuvé</label></div>
+            <div style="align-self:end"><button class="btn-secondary" @onclick="PlannerAsync" disabled="@_busy">8. Enregistrer avis</button></div>
+        </div>
+        <button class="btn-primary" @onclick="GateAsync" disabled="@_busy">9. Gate</button>
+        <button class="btn-primary" @onclick="ReportAsync" disabled="@_busy">10. Rapport</button>
+        <a class="btn-secondary" href="/mvp0" style="margin-left:0.5rem">← Campagnes</a>
+    </section>
+
+    <section class="card">
+        <h3>Anomalies (@_state.Anomalies.Count)</h3>
+        <table>
+            <thead><tr><th>Sévérité</th><th>Règle</th><th>Objet</th><th>Message</th><th>Ligne</th></tr></thead>
+            <tbody>
+            @foreach (var a in _state.Anomalies.Take(40))
+            {
+                <tr>
+                    <td>@a.Severity</td><td>@a.RuleCode</td><td>@a.ObjectKey</td><td>@a.Message</td><td>@(a.SourceLine?.ToString() ?? "—")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+
+    <section class="card">
+        <h3>By-pass (@_state.Bypasses.Count) — l’anomalie reste visible</h3>
+        <ul>
+            @foreach (var b in _state.Bypasses)
+            {
+                <li><code>@b.BypassId</code> → @b.AnomalyId — @b.Justification (@b.Decider) pénalité @b.ReliabilityPenalty</li>
+            }
+        </ul>
+    </section>
+
+    @if (_state.InputReliability is not null)
+    {
+        <section class="card">
+            <h3>Fiabilité intrant — @_state.InputReliability.GlobalScore.ToString("F1") (@_state.InputReliability.Band)</h3>
+            <p>@_state.InputReliability.Explanation</p>
+            <table>
+                <thead><tr><th>Domaine</th><th>Score</th><th>Formule</th></tr></thead>
+                <tbody>
+                @foreach (var d in _state.InputReliability.Domains)
+                {
+                    <tr><td>@d.Domain</td><td>@d.Score.ToString("F0")</td><td><small>@d.Formula</small></td></tr>
+                }
+                </tbody>
+            </table>
+        </section>
+    }
+
+    @if (_state.Backtest is not null)
+    {
+        <section class="card">
+            <h3>Backtest (sans solveur)</h3>
+            <p>OF=@_state.Backtest.WoCount · retard moy=@_state.Backtest.MeanDateErrorDays.ToString("F1") j · P90=@_state.Backtest.P90DateErrorDays.ToString("F1") · MAPE durée=@_state.Backtest.MapeDuration.ToString("F1")% · tolérance=@_state.Backtest.WithinToleranceRate.ToString("P0")</p>
+            @if (_state.ResultReliability is not null)
+            {
+                <p>Score résultat <strong>@_state.ResultReliability.GlobalScore.ToString("F1")</strong> — @_state.ResultReliability.Explanation</p>
+            }
+        </section>
+    }
+
+    @if (_state.Gate is not null)
+    {
+        <section class="card">
+            <h3>Gate — @_state.Gate.Outcome</h3>
+            <p>@_state.Gate.Reason</p>
+            <p>Intrant @_state.Gate.InputScore.ToString("F1") · Résultat @_state.Gate.ResultScore.ToString("F1") · Bloquants @_state.Gate.ActiveBlockings · By-pass @_state.Gate.ActiveBypasses</p>
+        </section>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_state.ReportHtml))
+    {
+        <section class="card">
+            <h3>Rapport GO / NO-GO</h3>
+            <button class="btn-secondary" @onclick="PrintReport">Imprimer / PDF</button>
+            <iframe srcdoc="@_state.ReportHtml" style="width:100%;height:480px;border:1px solid #ccc;margin-top:0.5rem"></iframe>
+        </section>
+    }
+}
+
+@code {
+    [Parameter] public Guid CampaignId { get; set; }
+
+    private Mvp0WorkflowStateDto? _state;
+    private string _planner = "Planificateur";
+    private string _comment = "Revue MVP-0";
+    private bool _approved = true;
+    private bool _busy;
+    private string? _error;
+    private string? _info;
+
+    protected override async Task OnParametersSetAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        try { _state = await Workflow.GetStateAsync(CampaignId); }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private async Task ImportAsync() => await Run(() => Workflow.ImportCsvDemoSeedAsync(CampaignId));
+    private async Task ImportCleanAsync() => await Run(() => Workflow.ImportCleanRealSeedAsync(CampaignId));
+    private async Task ValidateAsync() => await Run(() => Workflow.RunValidationAsync(CampaignId));
+    private async Task InputScoreAsync() => await Run(() => Workflow.ComputeInputReliabilityAsync(CampaignId));
+    private async Task BacktestAsync() => await Run(() => Workflow.RunBacktestAsync(CampaignId));
+    private async Task PlannerAsync() => await Run(() => Workflow.SavePlannerReviewAsync(CampaignId, _planner, _comment, _approved));
+    private async Task GateAsync() => await Run(() => Workflow.RunGateAsync(CampaignId));
+    private async Task ReportAsync() => await Run(() => Workflow.BuildReportAsync(CampaignId));
+
+    private async Task BypassAllBlockingAsync()
+    {
+        await Run(async () =>
+        {
+            var anoms = _state?.Anomalies ?? await Workflow.RunValidationAsync(CampaignId);
+            foreach (var a in anoms.Where(x => x.Severity == Mvp0Severities.Blocking))
+            {
+                try { await Workflow.CreateBypassAsync(CampaignId, a.AnomalyId, "Justification métier tracée MVP-0", _planner); }
+                catch { /* déjà by-passé */ }
+            }
+        });
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        _busy = true; _error = null; _info = null;
+        try { await action(); await ReloadAsync(); _info = "OK"; }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private void PrintReport()
+    {
+        // browser print via iframe — user uses Ctrl+P
+        _info = "Utilisez Imprimer dans le navigateur sur le rapport (Ctrl+P).";
+    }
+}

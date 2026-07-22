@@ -1,0 +1,216 @@
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@inject ApsFluxService FluxService
+
+@if (ShowPageHeader)
+{
+    <h2>Saturation et comparaison charge / capacité</h2>
+    <p class="hint">Phase 7. rho sur fenetre uniquement. Buffer en HRE. ROPE = recommandation (pas d'OF).</p>
+}
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Du</label>
+            <input type="date" class="form-control" @bind="_from" />
+        </div>
+        <div>
+            <label>Au</label>
+            <input type="date" class="form-control" @bind="_to" />
+        </div>
+        <div>
+            <label>Run CBN APS (id, optionnel)</label>
+            <input type="number" class="form-control" @bind="_cbnRunId" />
+        </div>
+        <div style="align-self:end">
+            <button class="btn-secondary" @onclick="() => ComputeAsync(false)" disabled="@_busy">Recalculer</button>
+            <button class="btn-primary" @onclick="() => ComputeAsync(true)" disabled="@_busy">Publier</button>
+        </div>
+    </div>
+</section>
+
+@if (_result is not null)
+{
+    <section class="card">
+        <h3>1. Charge par ressource</h3>
+        <table>
+            <thead><tr><th>Ressource</th><th>Type</th><th>Unite</th><th>Date</th><th>Qte</th><th>Charge</th></tr></thead>
+            <tbody>
+            @foreach (var l in _result.Loads)
+            {
+                <tr>
+                    <td>@l.ResourceCode</td>
+                    <td>@l.CapacityType</td>
+                    <td>@l.Unit</td>
+                    <td>@l.BucketDate</td>
+                    <td>@l.QtyToLaunch.ToString("F2")</td>
+                    <td>@l.Charge.ToString("F4")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        @if (ShowPageHeader)
+        {
+            <p><a href="/charges-capacites/charges">Detail charges →</a></p>
+        }
+    </section>
+
+    <section class="card">
+        <h3>2. Saturation rho (fenetre @_result.From → @_result.To)</h3>
+        <table>
+            <thead>
+                <tr><th>Ressource</th><th>Charge cum</th><th>Cap cum</th><th>rho</th><th>rho_cible</th><th>Marge</th><th>Statut</th></tr>
+            </thead>
+            <tbody>
+            @foreach (var s in _result.Saturations)
+            {
+                <tr>
+                    <td>@s.ResourceCode</td>
+                    <td>@s.ChargeCumulee.ToString("F2")</td>
+                    <td>@s.CapCum.ToString("F2")</td>
+                    <td>@(s.Rho?.ToString("F3") ?? "—")</td>
+                    <td>@s.RhoTarget.ToString("F2")</td>
+                    <td>@(s.RemainingMargin?.ToString("F2") ?? "—")</td>
+                    <td><strong>@s.Status</strong></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <ul>
+            @foreach (var s in _result.Saturations)
+            {
+                <li><code>@s.Formula</code> — @s.Cause</li>
+            }
+        </ul>
+    </section>
+
+    <section class="card">
+        <h3>3. Goulot courant</h3>
+        <p><strong>@_result.Bottleneck.ConstrainingCode</strong> (@_result.Bottleneck.Kind)
+           — rho @( _result.Bottleneck.Rho?.ToString("F3") ?? "n/a" )</p>
+        <p>@_result.Bottleneck.Explanation</p>
+        @if (_result.BottleneckMovedJournaled)
+        {
+            <p class="hint">GoulotDeplace journalise.</p>
+        }
+
+        <h3>4. Historique goulot</h3>
+        <table>
+            <thead><tr><th>Quand</th><th>Code</th><th>Kind</th><th>Explication</th></tr></thead>
+            <tbody>
+            @foreach (var h in _history)
+            {
+                <tr>
+                    <td>@h.At.ToLocalTime()</td>
+                    <td>@h.Code</td>
+                    <td>@h.Kind</td>
+                    <td>@h.Explanation</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+
+    <section class="card">
+        <h3>5–9. Buffer remaillage (HRE)</h3>
+        <p>Buffer actuel : <strong>@_result.Buffer.BufferHre.ToString("F2") HRE</strong></p>
+        <p>Couverture : @(_result.Buffer.CoverageDays?.ToString("F2") ?? "NON_CALCULABLE") j</p>
+        <p>Adequation : @_result.Buffer.AdequacyStatus
+           @if (_result.Buffer.Adequacy is double ad) { <span>= @ad.ToString("P0")</span> }
+        </p>
+        <p>Buffer cible : @(_result.BufferTarget.BufferTargetHre?.ToString("F2") ?? "TO_CONFIRM") —
+           zone <strong>@_result.BufferTarget.Zone</strong>
+           (consomme @((_result.BufferTarget.ConsumedRatio * 100).ToString("F0")) %)</p>
+        <p class="hint">@_result.BufferTarget.Cause</p>
+        <ul>
+            @foreach (var t in _result.Buffer.Traces)
+            {
+                <li>@t</li>
+            }
+        </ul>
+    </section>
+
+    <section class="card">
+        <h3>10. Recommandation ROPE</h3>
+        <p>Qte recommandee : <strong>@_result.Rope.RecommendedQty.ToString("F2")</strong>
+           — priorite @_result.Rope.Priority</p>
+        <p>@_result.Rope.Justification</p>
+        <p>Cree OF : <strong>@(_result.Rope.CreatesWorkOrder ? "OUI" : "NON")</strong></p>
+        @if (_result.Rope.UpstreamSpaceAlert)
+        {
+            <div class="alert alert-warning">Zone AMONT saturee — limiter/arreter tricotage.</div>
+        }
+        <ul>
+            @foreach (var t in _result.Rope.Traces)
+            {
+                <li>@t</li>
+            }
+        </ul>
+    </section>
+
+    <section class="card">
+        <h3>11. Saturation physique (rho_espace)</h3>
+        <table>
+            <thead><tr><th>Lieu</th><th>Occupé</th><th>Max</th><th>rho_espace</th><th>Statut</th></tr></thead>
+            <tbody>
+            @foreach (var sp in _result.SpaceSaturations)
+            {
+                <tr>
+                    <td>@sp.PlaceCode</td>
+                    <td>@sp.OccupiedVolume.ToString("F1")</td>
+                    <td>@sp.MaxVolume.ToString("F1")</td>
+                    <td>@(sp.RhoEspace?.ToString("F3") ?? "—")</td>
+                    <td>@sp.Status</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <p class="hint">Traces espace distinctes de rho capacite.</p>
+    </section>
+
+    <section class="card">
+        <h3>Traces globales</h3>
+        <ul>
+            @foreach (var t in _result.Traces)
+            {
+                <li>@t</li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    [Parameter] public bool ShowPageHeader { get; set; } = true;
+
+    private DateOnly _from = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly _to = DateOnly.FromDateTime(DateTime.Today.AddDays(6));
+    private long? _cbnRunId;
+    private ApsFluxComputeResultDto? _result;
+    private List<(DateTime At, string Code, string Kind, string Explanation)> _history = [];
+    private string? _error;
+    private bool _busy;
+
+    private async Task ComputeAsync(bool publish)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _result = await FluxService.ComputeAsync(new ApsFluxWindowRequest(_from, _to, _cbnRunId, publish));
+            _history = (await FluxService.ListBottleneckHistoryAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

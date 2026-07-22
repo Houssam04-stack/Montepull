@@ -1,0 +1,112 @@
+@page "/aps/journal"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Journal
+@inject ApsJournalService JournalService
+
+<PageTitle>APS Journal</PageTitle>
+
+<h2>APS — Journal des faits</h2>
+<p class="hint">Lecture seule. Append-only (M7). Distinct de <code>application_logs</code>.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Type</label>
+            <input class="form-control" @bind="_type" />
+        </div>
+        <div>
+            <label>Aggregate id</label>
+            <input class="form-control" @bind="_aggregate" />
+        </div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="LoadAsync" disabled="@_busy">Filtrer</button>
+            <button class="btn-secondary" @onclick="SeedDemoAsync" disabled="@_busy">Appender demo</button>
+        </div>
+    </div>
+
+    <table style="margin-top:1rem">
+        <thead>
+            <tr>
+                <th>Id</th>
+                <th>Type</th>
+                <th>Occurred</th>
+                <th>Recorded</th>
+                <th>Aggregate</th>
+                <th>Actor</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var e in _events)
+        {
+            <tr>
+                <td>@e.EventId</td>
+                <td>@e.EventType</td>
+                <td>@e.OccurredAtUtc.ToString("u")</td>
+                <td>@e.RecordedAtUtc.ToString("u")</td>
+                <td>@e.AggregateId</td>
+                <td>@e.Actor</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<ApsJournalEvent> _events = [];
+    private string? _type;
+    private string? _aggregate;
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _events = (await JournalService.QueryAsync(new ApsJournalQuery(_type, _aggregate))).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SeedDemoAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var occurred = DateTime.UtcNow.AddHours(-3);
+            await JournalService.AppendFactAsync(new AppendApsJournalFactCommand(
+                ApsFactEventTypes.PlanPublished,
+                occurred,
+                "plan:demo",
+                """{"note":"demo MVP journal"}""",
+                "aps-ui"));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

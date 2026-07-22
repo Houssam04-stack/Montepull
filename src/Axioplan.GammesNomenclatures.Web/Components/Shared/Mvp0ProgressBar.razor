@@ -1,0 +1,53 @@
+<nav class="mvp0-progress" aria-label="Étapes Qualité des données MVP-0">
+    @foreach (var step in Steps)
+    {
+        <a class="mvp0-progress-step @StepClass(step)"
+           href="@step.Href"
+           title="@step.Label">
+            <span class="mvp0-progress-num">@step.Number</span>
+            <span class="mvp0-progress-label">@step.ShortLabel</span>
+        </a>
+    }
+</nav>
+
+@code {
+    [Parameter] public int CurrentStep { get; set; } = 1;
+    [Parameter] public Guid? CampaignId { get; set; }
+
+    private static readonly (int Number, string ShortLabel, string Label, string RouteSuffix)[] StepDefs =
+    [
+        (1, "Campagne", "Campagne", ""),
+        (2, "Import", "Import", "imports"),
+        (3, "Validation", "Validation", "validation"),
+        (4, "Anomalies", "Anomalies", "validation"),
+        (5, "By-pass", "Corrections / By-pass", "bypass"),
+        (6, "Fiabilité", "Fiabilité", "fiabilite"),
+        (7, "Backtest", "Backtest", "backtest"),
+        (8, "Avis", "Avis planificateur", "backtest"),
+        (9, "Gate", "Gate", "gate"),
+        (10, "Rapport", "Rapport", "rapport")
+    ];
+
+    private IEnumerable<Mvp0StepLink> Steps =>
+        StepDefs.Select(s => new Mvp0StepLink(
+            s.Number,
+            s.ShortLabel,
+            s.Label,
+            CampaignId is Guid id && id != Guid.Empty && s.Number >= 2
+                ? $"/mvp0/workflow/{id}"
+                : s.RouteSuffix switch
+                {
+                    "" => "/mvp0",
+                    "imports" => "/mvp0/imports",
+                    _ => $"/mvp0/{s.RouteSuffix}"
+                }));
+
+    private string StepClass(Mvp0StepLink step)
+    {
+        if (step.Number < CurrentStep) return "done";
+        if (step.Number == CurrentStep) return "current";
+        return "";
+    }
+
+    private sealed record Mvp0StepLink(int Number, string ShortLabel, string Label, string Href);
+}

@@ -1,0 +1,16 @@
+<article class="module-card">
+    <div class="module-card-header">
+        <h3>@Title</h3>
+        <StatusBadge Status="@Status" Experimental="@Experimental" />
+    </div>
+    <p class="module-card-desc">@Description</p>
+    <a class="btn-primary module-card-btn" href="@Href">Ouvrir</a>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter, EditorRequired] public string Description { get; set; } = "";
+    [Parameter, EditorRequired] public string Href { get; set; } = "";
+    [Parameter] public ModuleStatusKind Status { get; set; } = ModuleStatusKind.Partial;
+    [Parameter] public bool Experimental { get; set; }
+}

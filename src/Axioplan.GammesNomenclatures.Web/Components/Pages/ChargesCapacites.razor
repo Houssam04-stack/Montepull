@@ -1,0 +1,45 @@
+@page "/charges-capacites"
+@page "/charges-capacites/{Tab}"
+@rendermode InteractiveServer
+
+<PageTitle>Charges et capacités</PageTitle>
+
+<PageHeader Title="Charges et capacités"
+            Description="Parcours unifié : capacité disponible, charge calculée, comparaison et saturation, réservations." />
+
+<SectionTabs Tabs="@_tabs" ActiveHref="@ActiveHref" AriaLabel="Étapes charges et capacités" />
+
+@switch (EffectiveTab)
+{
+    case "charges":
+        <ApsChargesPanel ShowPageHeader="false" />
+        break;
+    case "flux":
+        <ApsFluxPanel ShowPageHeader="false" />
+        break;
+    case "reservations":
+        <section class="card">
+            <h3>Réservations</h3>
+            <p class="hint">Les réservations sont calculées et affichées dans l'onglet <strong>Capacité disponible</strong> (bouton « Réserver 1u demo » ou réservations existantes).</p>
+        </section>
+        <ApsCapacitesPanel ShowPageHeader="false" />
+        break;
+    default:
+        <ApsCapacitesPanel ShowPageHeader="false" />
+        break;
+}
+
+@code {
+    [Parameter] public string? Tab { get; set; }
+
+    private static readonly SectionTabItem[] _tabs =
+    [
+        new("Capacité disponible", "/charges-capacites"),
+        new("Charge calculée", "/charges-capacites/charges"),
+        new("Saturation / comparaison", "/charges-capacites/flux"),
+        new("Réservations", "/charges-capacites/reservations")
+    ];
+
+    private string EffectiveTab => string.IsNullOrWhiteSpace(Tab) ? "capacites" : Tab.ToLowerInvariant();
+    private string ActiveHref => string.IsNullOrWhiteSpace(Tab) ? "/charges-capacites" : $"/charges-capacites/{Tab}";
+}

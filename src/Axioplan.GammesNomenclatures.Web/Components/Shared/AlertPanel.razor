@@ -1,0 +1,29 @@
+<div class="alert-panel @CssClass" role="status">
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <strong>@Title</strong>
+    }
+    @if (ChildContent is not null)
+    {
+        <div class="alert-panel-body">@ChildContent</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <p class="alert-panel-body">@Message</p>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public string Variant { get; set; } = "info";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string CssClass => Variant switch
+    {
+        "warning" => "alert-panel-warning",
+        "danger" => "alert-panel-danger",
+        "success" => "alert-panel-success",
+        _ => "alert-panel-info"
+    };
+}

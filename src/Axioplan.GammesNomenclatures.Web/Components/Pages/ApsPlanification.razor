@@ -1,0 +1,244 @@
+@page "/aps/planification"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Compiler
+@inject ApsPlanningService PlanningService
+
+<PageTitle>APS Planification</PageTitle>
+
+<PageHeader Title="Planification APS"
+            Description="Enchaînement CBN segment → capacités nettes (Cap_cum) → charges et saturation (ρ)." />
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+
+<section class="card">
+    <h3>Paramètres</h3>
+    <div class="form-grid">
+        <div>
+            <label>Fenêtre — du</label>
+            <input type="date" class="form-control" @bind="_from" />
+        </div>
+        <div>
+            <label>Au</label>
+            <input type="date" class="form-control" @bind="_to" />
+        </div>
+        <div>
+            <label>Segment</label>
+            <select class="form-control" @bind="_segment">
+                <option value="@ApsSegments.A">SEG_A — Tricotage</option>
+                <option value="@ApsSegments.B">SEG_B — Remaillage</option>
+                <option value="@ApsSegments.C">SEG_C — Aval</option>
+            </select>
+        </div>
+        <div>
+            <label>Article fini</label>
+            <input class="form-control" @bind="_finishedArticle" />
+        </div>
+        <div>
+            <label>Quantité</label>
+            <input type="number" class="form-control input-num" @bind="_quantity" />
+        </div>
+        <div>
+            <label>Date besoin</label>
+            <input type="date" class="form-control" @bind="_needDate" />
+        </div>
+        <div>
+            <label>Run CBN existant (optionnel)</label>
+            <input type="number" class="form-control" @bind="_existingCbnRunId" placeholder="Laisser 0 pour recalculer" />
+        </div>
+    </div>
+    <div class="inline-form mt-3">
+        <button class="btn-primary" @onclick="RunPlanningAsync" disabled="@_busy">Lancer planification complète</button>
+        <label class="hint" style="margin-left:1rem">
+            <input type="checkbox" @bind="_publish" /> Publier flux (journal)
+        </label>
+    </div>
+</section>
+
+@if (_result is not null)
+{
+    @if (_result.SegmentCbnRunId is long runId)
+    {
+        <p class="hint">Run CBN APS #{runId} — utilisez cet id dans <a href="/aps/flux">Flux</a>.</p>
+    }
+
+    <section class="card">
+        <h3>1. Capacités nettes (Cap_cum engageable)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ressource</th>
+                    <th>Type</th>
+                    <th>Unité</th>
+                    <th class="num">Cap_cum base</th>
+                    <th class="num">Cap_cum + paliers</th>
+                    <th class="num">Buckets</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var cap in _result.Capacities)
+            {
+                <tr>
+                    <td>@cap.ResourceCode</td>
+                    <td>@cap.ResourceType</td>
+                    <td>@cap.Unit</td>
+                    <td class="num">@cap.CapCumEngageable.ToString("F2")</td>
+                    <td class="num">@cap.CapCumWithTiers.ToString("F2")</td>
+                    <td class="num">@cap.Buckets.Count</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <p class="hint"><a href="/aps/capacites">Détail capacités par ressource →</a></p>
+    </section>
+
+    <section class="card">
+        <h3>2. Charges calculées</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ressource</th>
+                    <th>Type</th>
+                    <th>Date bucket</th>
+                    <th class="num">Qté lancer</th>
+                    <th class="num">Charge</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var load in _result.Flux.Loads.Where(l => l.CapacityType != "EXTERNE"))
+            {
+                <tr>
+                    <td>@load.ResourceCode</td>
+                    <td>@load.CapacityType</td>
+                    <td>@load.BucketDate</td>
+                    <td class="num">@load.QtyToLaunch.ToString("F2")</td>
+                    <td class="num">@load.Charge.ToString("F4")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <p class="hint"><a href="/aps/charges">Historique charges →</a></p>
+    </section>
+
+    <section class="card">
+        <h3>3. Saturation ρ = Charge / Capacité</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ressource</th>
+                    <th class="num">Charge cum.</th>
+                    <th class="num">Cap cum.</th>
+                    <th class="num">ρ</th>
+                    <th class="num">ρ cible</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var sat in _result.Flux.Saturations)
+            {
+                <tr class="@SatRowClass(sat.Status)">
+                    <td>@sat.ResourceCode</td>
+                    <td class="num">@sat.ChargeCumulee.ToString("F2")</td>
+                    <td class="num">@sat.CapCum.ToString("F2")</td>
+                    <td class="num">@(sat.Rho?.ToString("F3") ?? "—")</td>
+                    <td class="num">@sat.RhoTarget.ToString("F2")</td>
+                    <td><strong>@sat.Status</strong></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <p><strong>Goulot :</strong> @_result.Flux.Bottleneck.ConstrainingCode — @_result.Flux.Bottleneck.Explanation</p>
+    </section>
+
+    <section class="card">
+        <h3>Traces</h3>
+        <ul class="trace-list">
+            @foreach (var trace in _result.Traces)
+            {
+                <li>@trace</li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    private bool _busy;
+    private string? _error;
+    private string? _message;
+    private DateTime _from = DateTime.Today;
+    private DateTime _to = DateTime.Today.AddDays(13);
+    private DateTime _needDate = DateTime.Today.AddDays(21);
+    private string _segment = ApsSegments.B;
+    private string _finishedArticle = "DEMO_PF";
+    private double _quantity = 100;
+    private long _existingCbnRunId;
+    private bool _publish;
+    private ApsPlanningResultDto? _result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await PlanningService.EnsureReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task RunPlanningAsync()
+    {
+        _busy = true;
+        _error = null;
+        _message = null;
+        try
+        {
+            ApsSegmentCbnRunRequest? cbn = _existingCbnRunId > 0
+                ? null
+                : new ApsSegmentCbnRunRequest(
+                    $"PLAN-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                    _finishedArticle,
+                    _quantity,
+                    DateOnly.FromDateTime(_needDate),
+                    _segment,
+                    _segment switch
+                    {
+                        ApsSegments.A => "CIR_TRICOT_INT",
+                        ApsSegments.B => "CIR_REMAIL_INT",
+                        _ => "CIR_EXPED"
+                    },
+                    "COMPAT_DEFAULT");
+
+            _result = await PlanningService.RunAsync(new ApsPlanningRequest(
+                DateOnly.FromDateTime(_from),
+                DateOnly.FromDateTime(_to),
+                cbn,
+                _existingCbnRunId > 0 ? _existingCbnRunId : null,
+                _publish));
+
+            _message = _result.SegmentCbnRunId is long id
+                ? $"Planification terminee — CBN #{id}, goulot {_result.Flux.Bottleneck.ConstrainingCode}."
+                : $"Planification terminee — goulot {_result.Flux.Bottleneck.ConstrainingCode}.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string? SatRowClass(string status)
+        => status is "DEPASSEMENT" or "SATUREE" ? "row-warning" : null;
+}

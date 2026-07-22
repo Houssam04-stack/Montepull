@@ -1,0 +1,123 @@
+@page "/aps/referentiel"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@inject ApsReferentialService ReferentialService
+
+<PageTitle>APS Referentiel</PageTitle>
+
+<h2>APS — Referentiel minimal</h2>
+<p class="hint">Consultation des objets APS ajoutes (lieux, CC, circuits, stocks lot/bain). Tables legacy conservees.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<section class="card">
+    <h3>Lieux</h3>
+    <table>
+        <thead><tr><th>Id</th><th>Parent</th><th>Niveau</th><th>Code</th><th>Label</th></tr></thead>
+        <tbody>
+        @foreach (var p in _places)
+        {
+            <tr><td>@p.Id</td><td>@(p.ParentId?.ToString() ?? "—")</td><td>@p.Level</td><td>@p.Code</td><td>@p.Label</td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>Centres de charge</h3>
+    <table>
+        <thead><tr><th>Code</th><th>Type</th><th>Label</th></tr></thead>
+        <tbody>
+        @foreach (var c in _centers)
+        {
+            <tr><td>@c.Code</td><td>@c.ResourceType</td><td>@c.Label</td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>Zones stock</h3>
+    <table>
+        <thead><tr><th>Place</th><th>Role</th><th>CC servi</th></tr></thead>
+        <tbody>
+        @foreach (var z in _zones)
+        {
+            <tr><td>@z.PlaceCode</td><td>@z.Role</td><td>@(z.ServedChargeCenterId?.ToString() ?? "—")</td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>Stocks lot / bain</h3>
+    <table>
+        <thead><tr><th>Article</th><th>Lot</th><th>Bain</th><th>Qty</th><th>Statut</th></tr></thead>
+        <tbody>
+        @foreach (var s in _lots)
+        {
+            <tr><td>@s.ArticleCode</td><td>@(s.LotCode ?? "—")</td><td>@(s.BathCode ?? "—")</td><td>@s.Quantity @s.Unit</td><td>@s.Status</td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>Circuits / engagements</h3>
+    <table>
+        <thead><tr><th>Circuit</th><th>Segment</th><th>Type</th><th>Op</th></tr></thead>
+        <tbody>
+        @foreach (var c in _circuits)
+        {
+            <tr><td>@c.Code</td><td>@c.SegmentId</td><td>@c.CircuitType</td><td>@(c.OperationCode ?? "—")</td></tr>
+        }
+        </tbody>
+    </table>
+    <table style="margin-top:1rem">
+        <thead><tr><th>Partenaire</th><th>Qty</th><th>Remise</th><th>Retour</th><th>Deadline</th><th>Residuel</th></tr></thead>
+        <tbody>
+        @foreach (var e in _engagements)
+        {
+            <tr>
+                <td>@e.PartnerCode</td>
+                <td>@e.Quantity</td>
+                <td>@e.HandoverDate</td>
+                <td>@e.ReturnDate</td>
+                <td>@e.EngagementDeadline</td>
+                <td>@e.ResidualVolume</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsPlaceDto> _places = [];
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsChargeCenterDto> _centers = [];
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsStockZoneDto> _zones = [];
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsStockLotDto> _lots = [];
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsCircuitDto> _circuits = [];
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsExternalEngagementDto> _engagements = [];
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await ReferentialService.EnsureReadyAsync();
+            _places = (await ReferentialService.GetPlacesAsync()).ToList();
+            _centers = (await ReferentialService.GetChargeCentersAsync()).ToList();
+            _zones = (await ReferentialService.GetStockZonesAsync()).ToList();
+            _lots = (await ReferentialService.GetStockLotsAsync()).ToList();
+            _circuits = (await ReferentialService.GetCircuitsAsync()).ToList();
+            _engagements = (await ReferentialService.GetExternalEngagementsAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

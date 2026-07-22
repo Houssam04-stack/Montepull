@@ -1,0 +1,80 @@
+@page "/mvp0/validation"
+@page "/mvp0/anomalies"
+@page "/mvp0/bypass"
+@page "/mvp0/fiabilite"
+@page "/mvp0/backtest"
+@page "/mvp0/gate"
+@page "/mvp0/rapport"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Mvp0
+@using Axioplan.GammesNomenclatures.Application.Models
+@inject Mvp0WorkflowService Workflow
+@inject NavigationManager Nav
+
+<PageTitle>Qualité des données — MVP-0</PageTitle>
+
+<PageHeader Title="Qualité des données — MVP-0"
+            Description="Redirection vers le parcours guidé de la campagne." />
+
+<section class="card">
+    <LoadingState Message="Redirection vers le parcours campagne…" />
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <p class="hint">@_message</p>
+    }
+    @if (_list.Count > 1)
+    {
+        <h3>Sélectionner une campagne</h3>
+        <div class="form-grid">
+            <div>
+                <label>Campagne</label>
+                <select class="form-control" @bind="_campaignId">
+                    <option value="">—</option>
+                    @foreach (var c in _list)
+                    {
+                        <option value="@c.Id">@c.Code — @c.Status</option>
+                    }
+                </select>
+            </div>
+            <div style="align-self:end">
+                <button class="btn-primary" @onclick="Open" disabled="@(string.IsNullOrEmpty(_campaignId))">Ouvrir le parcours</button>
+                <a class="btn-secondary" href="/mvp0">Campagnes</a>
+            </div>
+        </div>
+    }
+</section>
+
+@code {
+    private List<Mvp0CampaignDto> _list = [];
+    private string _campaignId = "";
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Workflow.EnsureReadyAsync();
+        _list = (await Workflow.ListCampaignsAsync()).ToList();
+
+        if (_list.Count == 1)
+        {
+            Nav.NavigateTo($"/mvp0/workflow/{_list[0].Id}", replace: true);
+            return;
+        }
+
+        if (_list.Count == 0)
+        {
+            _message = "Aucune campagne — créez-en une depuis la page Campagnes.";
+        }
+        else
+        {
+            _message = "Plusieurs campagnes actives — sélectionnez celle à ouvrir.";
+        }
+    }
+
+    private void Open()
+    {
+        if (Guid.TryParse(_campaignId, out var id))
+        {
+            Nav.NavigateTo($"/mvp0/workflow/{id}");
+        }
+    }
+}

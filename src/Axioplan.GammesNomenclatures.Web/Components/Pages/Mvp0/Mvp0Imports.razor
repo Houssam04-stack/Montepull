@@ -1,0 +1,262 @@
+@page "/mvp0/imports"
+@rendermode InteractiveServer
+@using System.Text
+@using Microsoft.AspNetCore.Components.Forms
+@using Axioplan.GammesNomenclatures.Application.Mvp0
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Mvp0
+@inject Mvp0WorkflowService Workflow
+@inject NavigationManager Nav
+
+<PageTitle>MVP-0 Imports</PageTitle>
+
+<div class="alert" style="background:#fff7ed;border:1px solid #fdba74;padding:0.6rem;margin-bottom:1rem">
+    Assistant d’import MVP-0 (CSV ou Excel .xlsx/.xls). Aucune ligne n’est ignorée silencieusement.
+    Les colonnes non mappées sont signalées. Excel : 1ʳᵉ feuille convertie en CSV interne versionné.
+</div>
+
+<section class="card">
+    <h3>Campagne</h3>
+    <div class="form-grid">
+        <div>
+            <label>Campagne</label>
+            <select class="form-control" value="@_campaignId" @onchange="OnCampaignChanged">
+                <option value="">— choisir —</option>
+                @foreach (var c in _campaigns)
+                {
+                    <option value="@c.Id">@c.Code (@c.FamilyCode)</option>
+                }
+            </select>
+        </div>
+        <div style="align-self:end">
+            <a class="btn-secondary" href="/mvp0">Campagnes</a>
+            @if (Guid.TryParse(_campaignId, out var cid) && cid != Guid.Empty)
+            {
+                <a class="btn-primary" href="@($"/mvp0/workflow/{cid}")">Parcours</a>
+            }
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <h3>Assistant CSV</h3>
+    <div class="form-grid">
+        <div>
+            <label>Type de données</label>
+            <select class="form-control" @bind="_dataType">
+                <option value="@Mvp0DataTypes.Articles">Articles</option>
+                <option value="@Mvp0DataTypes.Boms">Nomenclatures</option>
+                <option value="@Mvp0DataTypes.Routings">Gammes / opérations</option>
+                <option value="@Mvp0DataTypes.Calendars">Calendriers</option>
+                <option value="@Mvp0DataTypes.WorkOrders">Historique OF</option>
+                <option value="@Mvp0DataTypes.Centers">Centres de charge</option>
+                <option value="@Mvp0DataTypes.BomOpLinks">Liaisons BOM↔OP</option>
+            </select>
+        </div>
+        <div>
+            <label>Fichier CSV ou Excel</label>
+            <InputFile OnChange="OnFile" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+        </div>
+        @if (_excelSheets.Count > 1)
+        {
+            <div>
+                <label>Feuille Excel</label>
+                <select class="form-control" @bind="_selectedSheet">
+                    @foreach (var s in _excelSheets)
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+        }
+        <div style="align-self:end">
+            <button class="btn-secondary" @onclick="PreviewAsync" disabled="@(_busy || string.IsNullOrEmpty(_csv))">Prévisualiser / mapping</button>
+            <button class="btn-primary" @onclick="ImportAsync" disabled="@(_busy || string.IsNullOrEmpty(_csv) || string.IsNullOrEmpty(_campaignId))">Importer (versionné)</button>
+        </div>
+    </div>
+
+    @if (_preview is not null)
+    {
+        <h4>Colonnes détectées</h4>
+        <p>Lignes données: @_preview.TotalDataLines</p>
+        @if (_preview.RequiredMissing.Count > 0)
+        {
+            <div class="alert alert-danger">Colonnes obligatoires manquantes: @string.Join(", ", _preview.RequiredMissing)</div>
+        }
+        <table>
+            <thead><tr><th>Champ logique</th><th>Colonne fichier</th></tr></thead>
+            <tbody>
+            @foreach (var kv in _preview.SuggestedMapping)
+            {
+                <tr><td>@kv.Key</td><td>@kv.Value</td></tr>
+            }
+            </tbody>
+        </table>
+        <h4>Aperçu</h4>
+        <table>
+            <thead><tr>@foreach (var h in _preview.Headers){<th>@h</th>}</tr></thead>
+            <tbody>
+            @foreach (var row in _preview.PreviewRows)
+            {
+                <tr>@foreach (var cell in row){<td>@cell</td>}</tr>
+            }
+            </tbody>
+        </table>
+    }
+
+    @if (!string.IsNullOrEmpty(_error)) { <div class="alert alert-danger">@_error</div> }
+    @if (!string.IsNullOrEmpty(_info)) { <div class="alert alert-success">@_info</div> }
+
+    <hr />
+    <button class="btn-secondary" @onclick="SeedDirtyAsync" disabled="@_busy">Charger seed anomalies (demo)</button>
+    <button class="btn-secondary" @onclick="SeedCleanAsync" disabled="@_busy">Charger seed REAL propre</button>
+</section>
+
+@if (_batches.Count > 0)
+{
+    <section class="card">
+        <h3>Lots d’import (versions)</h3>
+        <table>
+            <thead><tr><th>Ver</th><th>Type</th><th>Fichier</th><th>Hash</th><th>Lu/Imp/Rej</th><th>Prov</th></tr></thead>
+            <tbody>
+            @foreach (var b in _batches)
+            {
+                <tr>
+                    <td>@b.Version</td><td>@b.DataType</td><td>@b.FileName</td>
+                    <td><small>@(b.FileHash.Length > 12 ? b.FileHash[..12] : b.FileHash)…</small></td>
+                    <td>@b.LinesRead / @b.LinesImported / @b.LinesRejected</td><td>@b.Provenance</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}
+
+@code {
+    private List<Mvp0CampaignDto> _campaigns = [];
+    private List<Mvp0ImportBatchDto> _batches = [];
+    private string _campaignId = "";
+    private string _dataType = Mvp0DataTypes.Articles;
+    private string? _csv;
+    private string _fileName = "upload.csv";
+    private readonly Dictionary<string, string> _excelBySheet = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _excelSheets = [];
+    private string _selectedSheet = "";
+    private Mvp0CsvPreview? _preview;
+    private bool _busy;
+    private string? _error;
+    private string? _info;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Workflow.EnsureReadyAsync();
+        _campaigns = (await Workflow.ListCampaignsAsync()).ToList();
+    }
+
+    private async Task OnCampaignChanged(ChangeEventArgs e)
+    {
+        _campaignId = e.Value?.ToString() ?? "";
+        if (Guid.TryParse(_campaignId, out var id))
+            _batches = (await Workflow.ListImportBatchesAsync(id)).ToList();
+        else
+            _batches = [];
+    }
+
+    private async Task OnFile(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _preview = null;
+        _excelBySheet.Clear();
+        _excelSheets = [];
+        _selectedSheet = "";
+        var file = e.File;
+        _fileName = file.Name;
+        await using var stream = file.OpenReadStream(maxAllowedSize: 8 * 1024 * 1024);
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        if (ext is ".xlsx" or ".xls")
+        {
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            try
+            {
+                var sheets = await Workflow.ConvertExcelAsync(ms.ToArray());
+                foreach (var (name, csv) in sheets)
+                {
+                    _excelBySheet[name] = csv;
+                    _excelSheets.Add(name);
+                }
+
+                _selectedSheet = _excelSheets[0];
+                _csv = _excelBySheet[_selectedSheet];
+                _info = $"Excel lu : {_excelSheets.Count} feuille(s). Sélectionnez le type de données puis prévisualisez.";
+            }
+            catch (Exception ex)
+            {
+                _error = ex.Message;
+                _csv = null;
+            }
+        }
+        else
+        {
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            _csv = await reader.ReadToEndAsync();
+        }
+    }
+
+    private Task PreviewAsync()
+    {
+        if (_excelBySheet.Count > 0 && !string.IsNullOrEmpty(_selectedSheet) && _excelBySheet.TryGetValue(_selectedSheet, out var sheetCsv))
+            _csv = sheetCsv;
+        if (string.IsNullOrWhiteSpace(_csv)) return Task.CompletedTask;
+        _preview = Workflow.PreviewCsv(_dataType, _csv);
+        if (_preview.RequiredMissing.Count > 0)
+            _info = "Corrigez les colonnes manquantes ou le mapping avant import.";
+        return Task.CompletedTask;
+    }
+
+    private async Task ImportAsync()
+    {
+        if (_excelBySheet.Count > 0 && !string.IsNullOrEmpty(_selectedSheet) && _excelBySheet.TryGetValue(_selectedSheet, out var sheetCsv))
+            _csv = sheetCsv;
+        if (!Guid.TryParse(_campaignId, out var id) || string.IsNullOrWhiteSpace(_csv)) return;
+        _busy = true; _error = null;
+        try
+        {
+            var batch = await Workflow.ImportCsvAsync(id, _dataType, _fileName, _csv, null);
+            _info = $"Import v{batch.Version} — lus={batch.LinesRead} importés={batch.LinesImported} rejetés={batch.LinesRejected}";
+            if (batch.LinesRejected > 0)
+                _info += " — voir rapport lot (rejets non silencieux).";
+            _batches = (await Workflow.ListImportBatchesAsync(id)).ToList();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task SeedDirtyAsync()
+    {
+        if (!Guid.TryParse(_campaignId, out var id)) { _error = "Choisir une campagne"; return; }
+        _busy = true;
+        try
+        {
+            await Workflow.ImportCsvDemoSeedAsync(id);
+            _info = "Seed anomalies chargé (versionné).";
+            _batches = (await Workflow.ListImportBatchesAsync(id)).ToList();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task SeedCleanAsync()
+    {
+        if (!Guid.TryParse(_campaignId, out var id)) { _error = "Choisir une campagne"; return; }
+        _busy = true;
+        try
+        {
+            await Workflow.ImportCleanRealSeedAsync(id);
+            _info = "Seed REAL propre chargé.";
+            _batches = (await Workflow.ListImportBatchesAsync(id)).ToList();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

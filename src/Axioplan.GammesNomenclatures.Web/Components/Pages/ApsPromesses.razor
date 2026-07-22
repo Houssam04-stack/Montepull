@@ -1,0 +1,81 @@
+@page "/aps/promesses"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@inject ApsCtpService CtpService
+
+<PageTitle>APS Promesses</PageTitle>
+
+<h2>APS — Historique des promesses CTP</h2>
+<p class="hint">Libération demo = événements compensatoires (CapacitéLibérée / MatiereLiberee). Pas de modification historique.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_info))
+{
+    <div class="alert alert-success">@_info</div>
+}
+
+<section class="card">
+    <button class="btn-secondary" @onclick="ReloadAsync">Rafraîchir</button>
+    <table>
+        <thead>
+            <tr>
+                <th>Id</th><th>Statut</th><th>Outcome</th><th>Date</th><th>Régime</th>
+                <th>Goulot</th><th>Fiab.</th><th>HRE</th><th>Float</th><th>Circuit</th><th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var p in _list)
+        {
+            <tr>
+                <td>@p.PromiseId</td>
+                <td>@p.Status</td>
+                <td>@p.Outcome</td>
+                <td>@(p.ProposedDate?.ToString() ?? "—")</td>
+                <td>@p.EffectiveRegime</td>
+                <td>@p.Bottleneck</td>
+                <td>@(p.Reliability?.ToString("F2") ?? p.ReliabilityStatus)</td>
+                <td>@(p.Hre?.ToString("F2") ?? "—")</td>
+                <td>@(p.FloatDays?.ToString() ?? "—") @p.FloatStatus</td>
+                <td>@(p.CircuitCode ?? "—")</td>
+                <td>
+                    @if (p.Status == "ACTIVE")
+                    {
+                        <button class="btn-secondary" @onclick="() => ReleaseAsync(p.Id)">Libérer</button>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<ApsCtpPromiseDto> _list = [];
+    private string? _error;
+    private string? _info;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        try
+        {
+            await CtpService.EnsureReadyAsync();
+            _list = (await CtpService.ListPromisesAsync()).ToList();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private async Task ReleaseAsync(long id)
+    {
+        _error = null; _info = null;
+        var (ok, err) = await CtpService.ReleaseAsync(id);
+        if (!ok) _error = err;
+        else _info = "Promesse libérée — compensation journalisée.";
+        await ReloadAsync();
+    }
+}

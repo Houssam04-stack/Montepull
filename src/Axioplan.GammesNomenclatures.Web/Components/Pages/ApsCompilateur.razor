@@ -1,0 +1,165 @@
+@page "/aps/compilateur"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Compiler
+@inject ApsCompilerService CompilerService
+
+<PageTitle>APS Compilateur</PageTitle>
+
+<h2>APS — Compilateur (squelette)</h2>
+<p class="hint">Artefacts BESOINS / CHARGES / HRE / DELAI — hashes et statut VALID/INVALID. Calculs partiels marques TO_CONFIRM.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Article racine</label>
+            <input class="form-control" @bind="_root" />
+        </div>
+        <div>
+            <label>Segment</label>
+            <select class="form-control" @bind="_segment">
+                <option value="@ApsSegments.A">@ApsSegments.A</option>
+                <option value="@ApsSegments.B">@ApsSegments.B</option>
+                <option value="@ApsSegments.C">@ApsSegments.C</option>
+            </select>
+        </div>
+        <div>
+            <label>Chaine circuits</label>
+            <input class="form-control" @bind="_chain" />
+        </div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="CompileAsync" disabled="@_busy">Recompiler</button>
+            <button class="btn-secondary" @onclick="LoadAsync" disabled="@_busy">Rafraichir</button>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Id</th>
+                <th>Racine</th>
+                <th>Seg</th>
+                <th>Kind</th>
+                <th>Status</th>
+                <th>Hash</th>
+                <th>Compile</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var a in _artifacts)
+        {
+            <tr>
+                <td>@a.Id</td>
+                <td>@a.RootArticleCode</td>
+                <td>@a.Segment</td>
+                <td>@a.ArtifactKind</td>
+                <td>@a.Status</td>
+                <td><code>@a.SourceHash[..Math.Min(12, a.SourceHash.Length)]…</code></td>
+                <td>@a.CompiledAtUtc.ToString("u")</td>
+                <td>
+                    @if (a.Status == ApsCompilerStatuses.Valid)
+                    {
+                        <button class="btn-danger btn-sm" @onclick="() => InvalidateAsync(a.Id)" disabled="@_busy">Invalider</button>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<ApsCompiledArtifactDto> _artifacts = [];
+    private string _root = "DEMO_PF";
+    private string _segment = ApsSegments.B;
+    private string _chain = "CIR_REMAIL_INT";
+    private string? _error;
+    private string? _message;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _artifacts = (await CompilerService.ListAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CompileAsync()
+    {
+        _busy = true;
+        _error = null;
+        _message = null;
+        try
+        {
+            var bundle = await CompilerService.CompileAsync(new CompileApsRequest(
+                _root,
+                _segment,
+                _chain,
+                BomFingerprint: "bom-fp-demo-v1",
+                RoutingFingerprint: "rtg-fp-demo-v1",
+                BomLines:
+                [
+                    new CompileBomLineInput("FIL-DEMO", 0.12, "TRICOTAGE")
+                ],
+                RoutingOps:
+                [
+                    new CompileRoutingOpInput("REMAILLAGE", "REMAILLAGE", 12, true),
+                    new CompileRoutingOpInput("TRICOTAGE", "TRICOTAGE", 5, false)
+                ]));
+            _message = $"Compile OK — hash {bundle.SourceHash[..12]}… ({bundle.Needs.Count} besoins)";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task InvalidateAsync(long id)
+    {
+        _busy = true;
+        try
+        {
+            await CompilerService.InvalidateArtifactAsync(id);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

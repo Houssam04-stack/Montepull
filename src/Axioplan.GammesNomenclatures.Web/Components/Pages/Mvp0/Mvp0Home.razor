@@ -1,0 +1,95 @@
+@page "/mvp0"
+@page "/mvp0/campagnes"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Mvp0
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Mvp0
+@inject Mvp0WorkflowService Workflow
+@inject NavigationManager Nav
+
+<PageTitle>Qualité des données — MVP-0</PageTitle>
+
+<PageHeader Title="Qualité des données — MVP-0"
+            Description="Campagnes de validation, gate 0→1 et fiabilisation des données avant planification." />
+
+<div class="alert" style="background:#fff7ed;border:1px solid #fdba74;color:#9a3412;padding:0.75rem;margin-bottom:1rem">
+    <strong>Gate 0→1</strong> — Les modules d’ordonnancement et APS avancé ne sont pas validés tant que cette gate n’est pas GO.
+    Objectif : fiabiliser les données d’<em>une</em> famille, pas produire un planning.
+</div>
+
+@if (!string.IsNullOrEmpty(_error)) { <div class="alert alert-danger">@_error</div> }
+@if (!string.IsNullOrEmpty(_info)) { <div class="alert alert-success">@_info</div> }
+
+<section class="card">
+    <h3>Nouvelle campagne</h3>
+    <div class="form-grid">
+        <div><label>Famille pilote</label><input class="form-control" @bind="_family" /></div>
+        <div><label>Site</label><input class="form-control" @bind="_site" /></div>
+        <div><label>Responsable</label><input class="form-control" @bind="_owner" /></div>
+        <div><label><input type="checkbox" @bind="_simulated" /> Données SIMULATED (demo)</label></div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="CreateAsync" disabled="@_busy">Créer</button>
+            <button class="btn-secondary" @onclick="DemoAsync" disabled="@_busy">Parcours demo bout-en-bout</button>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <h3>Campagnes</h3>
+    <table>
+        <thead><tr><th>Code</th><th>Famille</th><th>Statut</th><th>Provenance</th><th>Gate</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var c in _list)
+        {
+            <tr>
+                <td>@c.Code</td><td>@c.FamilyCode</td><td>@c.Status</td><td>@c.Provenance</td><td>@(c.GateOutcome ?? "—")</td>
+                <td><a href="@($"/mvp0/workflow/{c.Id}")">Ouvrir parcours</a></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<Mvp0CampaignDto> _list = [];
+    private string _family = "PULL";
+    private string _site = "SITE-1";
+    private string _owner = "Planificateur";
+    private bool _simulated = true;
+    private bool _busy;
+    private string? _error;
+    private string? _info;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Workflow.EnsureReadyAsync();
+        _list = (await Workflow.ListCampaignsAsync()).ToList();
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var c = await Workflow.CreateCampaignAsync(_family, _site, _owner,
+                DateOnly.FromDateTime(DateTime.Today.AddDays(-90)), DateOnly.FromDateTime(DateTime.Today), _simulated);
+            Nav.NavigateTo($"/mvp0/workflow/{c.Id}");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task DemoAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var state = await Workflow.RunDemoEndToEndAsync(_family, _owner, _simulated);
+            _info = $"Demo terminée — Gate={state.Gate?.Outcome} Score in={state.InputReliability?.GlobalScore:F0} out={state.ResultReliability?.GlobalScore:F0}";
+            _list = (await Workflow.ListCampaignsAsync()).ToList();
+            Nav.NavigateTo($"/mvp0/workflow/{state.Campaign.Id}");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

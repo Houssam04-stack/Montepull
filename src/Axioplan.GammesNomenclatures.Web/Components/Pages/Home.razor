@@ -1,0 +1,49 @@
+@page "/accueil"
+@rendermode InteractiveServer
+
+<PageTitle>Tableau de bord</PageTitle>
+
+<PageHeader Title="Tableau de bord"
+            Description="Point d'entrée unique — référentiels, préparation des données, calculs et planification APS." />
+
+<div class="module-grid">
+    <ModuleCard Title="Référentiels"
+                Description="Articles, nomenclatures, stock et paramètres de calcul."
+                Href="/articles"
+                Status="ModuleStatusKind.Operational" />
+    <ModuleCard Title="Importer des données"
+                Description="Import Excel des commandes et nomenclatures BOM."
+                Href="/imports"
+                Status="ModuleStatusKind.Operational" />
+    <ModuleCard Title="Vérifier les données avec MVP-0"
+                Description="Campagnes qualité, validation, gate et rapport de fiabilité."
+                Href="/mvp0"
+                Status="ModuleStatusKind.Partial" />
+    <ModuleCard Title="Calculer les besoins CBN"
+                Description="Calcul métier, simulation MRP avec traçabilité, ou CBN APS segment."
+                Href="/cbn"
+                Status="ModuleStatusKind.Operational" />
+    <ModuleCard Title="Vérifier stock et pegging"
+                Description="Consultation stock par lots et affectation besoins / offres."
+                Href="/stock"
+                Status="ModuleStatusKind.Operational" />
+    <ModuleCard Title="Calculer charges et capacités"
+                Description="Capacité nette, charges, saturation et réservations — parcours APS unifié."
+                Href="/charges-capacites"
+                Status="ModuleStatusKind.Partial" />
+    <ModuleCard Title="Lancer la planification"
+                Description="Orchestration CBN APS → capacités → flux sur une fenêtre."
+                Href="/aps/planification"
+                Status="ModuleStatusKind.Partial" />
+</div>
+
+<section class="card">
+    <h3>Accès rapides secondaires</h3>
+    <ul class="link-list">
+        <li><a href="/pegging">Pegging</a></li>
+        <li><a href="/parametres">Paramètres</a></li>
+        <li><a href="/simulation-mrp">Simulation MRP (atelier)</a></li>
+        <li><a href="/">Simulation gammes (legacy)</a></li>
+        <li><a href="/admin/documentation">Documentation technique</a></li>
+    </ul>
+</section>

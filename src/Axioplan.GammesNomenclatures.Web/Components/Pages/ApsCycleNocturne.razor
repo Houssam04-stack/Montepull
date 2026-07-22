@@ -1,0 +1,38 @@
+@page "/aps/cycle-nocturne"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@inject NightlyCycleService Nightly
+
+<PageTitle>APS Cycle nocturne</PageTitle>
+<h2>APS — Cycle nocturne M7</h2>
+<p class="hint">Déclenchement manuel MVP. 10 étapes ordonnées. Architecture prête pour job nocturne.</p>
+@if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+<section class="card">
+    <label><input type="checkbox" @bind="_forceInv" /> Forcer invalidation estimateur</label>
+    <label><input type="checkbox" @bind="_forceFail" /> Forcer échec recompile</label>
+    <button class="btn-primary" @onclick="RunAsync" disabled="@_busy">Lancer cycle</button>
+</section>
+@foreach (var run in _runs)
+{
+    <section class="card">
+        <h3>Run #@run.Id — @run.Status</h3>
+        <p>@run.StartedAtUtc → @(run.FinishedAtUtc?.ToString() ?? "…") — @run.Notes</p>
+        <ol>
+        @foreach (var s in run.Steps.OrderBy(x => x.StepOrder))
+        {
+            <li><strong>@s.StepName</strong> [@s.Status] — @s.Detail</li>
+        }
+        </ol>
+    </section>
+}
+@code {
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsNightlyRunDto> _runs = [];
+    private bool _forceInv; private bool _forceFail; private bool _busy; private string? _error;
+    protected override async Task OnInitializedAsync() { await Nightly.EnsureReadyAsync(); _runs = (await Nightly.ListRunsAsync()).ToList(); }
+    private async Task RunAsync() {
+        _busy=true; _error=null;
+        try { var r = await Nightly.RunAsync(_forceInv, _forceFail); _runs = (await Nightly.ListRunsAsync()).ToList(); }
+        catch(Exception ex){ _error=ex.Message; }
+        finally{ _busy=false; }
+    }
+}

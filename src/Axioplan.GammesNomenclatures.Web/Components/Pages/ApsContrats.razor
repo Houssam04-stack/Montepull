@@ -1,0 +1,50 @@
+@page "/aps/contrats"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@inject ApsContractService ContractService
+
+<PageTitle>APS Contrats</PageTitle>
+<h2>APS — Contrats de flux</h2>
+<p class="hint">Publié = immuable. Révision = nouvelle version. Zones GELÉE/NÉGOCIABLE/LIBRE.</p>
+@if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+@if (_info is not null) { <div class="alert alert-success">@_info</div> }
+<section class="card">
+    <button class="btn-primary" @onclick="PublishAsync">Publier contrat demo</button>
+    <label>Offset semaine plan (0=cette sem.)</label>
+    <input type="number" class="form-control" @bind="_offset" />
+    <label>Nouvelle charge</label>
+    <input type="number" class="form-control" @bind="_newLoad" />
+    <label>Gain attendu</label>
+    <input type="number" class="form-control" @bind="_gain" />
+    <label>Justification</label>
+    <input class="form-control" @bind="_justif" />
+    <button class="btn-secondary" @onclick="ReviseAsync">Tenter révision</button>
+</section>
+<section class="card">
+    <table>
+        <thead><tr><th>Id</th><th>Ver</th><th>Statut</th><th>Sem</th><th>Charge</th><th>Fenêtre</th><th>Hash</th></tr></thead>
+        <tbody>
+        @foreach (var c in _list)
+        {
+            <tr>
+                <td>@c.ContractId</td><td>@c.Version</td><td>@c.Status</td>
+                <td>@c.IsoWeek/@c.Year</td><td>@c.EngagedLoad</td>
+                <td>@c.WindowStart→@c.WindowEnd</td><td><code>@(c.SourceHash.Length>12?c.SourceHash[..12]:c.SourceHash)</code></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+@code {
+    private List<Axioplan.GammesNomenclatures.Application.Models.ApsFlowContractDto> _list = [];
+    private int _offset = 0; private double _newLoad = 150; private double _gain = 100; private string _justif = "gain mix";
+    private string? _error; private string? _info;
+    protected override async Task OnInitializedAsync() { await ContractService.EnsureReadyAsync(); await Reload(); }
+    private async Task Reload() => _list = (await ContractService.ListContractsAsync()).ToList();
+    private async Task PublishAsync() { _error=null; try { await ContractService.PublishDemoAsync(); _info="Contrat publié."; await Reload(); } catch(Exception ex){ _error=ex.Message;} }
+    private async Task ReviseAsync() {
+        _error=null; _info=null;
+        var (rev, err) = await ContractService.TryReviseAsync("FC-DEMO", _newLoad, _gain, _justif, _offset);
+        if (err is not null) _error = err; else { _info = $"Révision v{rev!.Version}"; await Reload(); }
+    }
+}

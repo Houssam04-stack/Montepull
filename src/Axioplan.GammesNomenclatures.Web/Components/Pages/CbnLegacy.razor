@@ -1,0 +1,329 @@
+@page "/cbn"
+@page "/cbn/legacy"
+@rendermode InteractiveServer
+@inject ICbnApplicationService CbnApplication
+@inject SimulationService SimulationService
+
+<PageTitle>CBN — Calcul des besoins nets</PageTitle>
+
+<PageHeader Title="CBN — Calcul des besoins nets"
+            Description="Calcul sur commandes et nomenclatures du référentiel métier. Résultat exploitable pour le pegging." />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <LoadingState Message="Chargement des commandes et familles…" />
+}
+else
+{
+    <section class="card">
+        <h3>Lancer un calcul CBN</h3>
+
+        <div class="form-grid">
+            <div>
+                <label for="order">Commande client</label>
+                <select id="order" class="form-control" @bind="_selectedOrderId" @bind:after="OnOrderChanged">
+                    @foreach (var order in _orders)
+                    {
+                        <option value="@order.Id">@order.Code — @(order.Label ?? order.Code)</option>
+                    }
+                </select>
+            </div>
+
+            <div>
+                <label for="family">Famille produit</label>
+                <select id="family" class="form-control" @bind="_selectedFamilyCode">
+                    @foreach (var family in _families)
+                    {
+                        <option value="@family.Code">@family.Label</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        @if (_orderLines.Count > 0)
+        {
+            <h4>Lignes de commande</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ligne</th>
+                        <th>Article</th>
+                        <th>Taille</th>
+                        <th>Couleur</th>
+                        <th class="num">Quantite</th>
+                        <th>Ref. externe</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in _orderLines)
+                    {
+                        <tr>
+                            <td>@line.LineNo</td>
+                            <td>@line.ArticleCode</td>
+                            <td>@(line.SizeCode ?? "—")</td>
+                            <td>@DisplayLabels.Color(line.ColorCode ?? "—")</td>
+                            <td class="num">@line.Quantity.ToString("F0") @DisplayLabels.Unit(line.Unit)</td>
+                            <td>@(line.ExternalRef ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <button class="btn-primary mt-3" @onclick="RunCbnAsync" disabled="@_isRunning">
+            @(_isRunning ? "Calcul en cours..." : "Calculer les besoins")
+        </button>
+
+        @if (!string.IsNullOrWhiteSpace(_runError))
+        {
+            <div class="alert alert-warning mt-3">@_runError</div>
+        }
+    </section>
+
+    @if (_result is not null)
+    {
+        <section class="card summary-banner">
+            <h3>Resultat CBN #@_result.RunId</h3>
+            <div class="summary-stats">
+                <div class="stat">
+                    <span class="stat-value">@_result.Requirements.Count</span>
+                    <span class="stat-label">besoins calcules</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.ComponentTotals.Count</span>
+                    <span class="stat-label">composants</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.Traces.Count</span>
+                    <span class="stat-label">traces</span>
+                </div>
+            </div>
+            <p class="hint">Commande @_result.SalesOrderCode — Famille @_result.ProductFamilyCode — @_result.Status</p>
+        </section>
+
+        <section class="card">
+            <h3>Nomenclature aplatie</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Niv.</th>
+                        <th>Composant</th>
+                        <th>Classe</th>
+                        <th class="num">Qte / unite</th>
+                        <th class="num">Perte</th>
+                        <th>Comportement</th>
+                        <th>Source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _result.FlattenedBom)
+                    {
+                        <tr>
+                            <td>@row.LineNo</td>
+                            <td>@row.BomLevel</td>
+                            <td>@(string.IsNullOrWhiteSpace(row.ComponentLabel) ? DisplayLabels.Component(row.ComponentCode) : row.ComponentLabel)</td>
+                            <td>@DisplayLabels.CalculationMode(row.CalculationMode)</td>
+                            <td class="num">@row.QuantityPerUnit.ToString("F3") @DisplayLabels.Unit(row.Unit)</td>
+                            <td class="num">@row.LossRate.ToString("P0")</td>
+                            <td>@row.Behavior</td>
+                            <td>@row.SourcePath</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
+            <h3>Besoins par variante</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Variante</th>
+                        <th>Composant</th>
+                        <th>Classe</th>
+                        <th class="num">Net</th>
+                        <th class="num">Brut</th>
+                        <th>Unite</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _result.Requirements)
+                    {
+                        <tr>
+                            <td>@row.VariantLabel</td>
+                            <td>@(string.IsNullOrWhiteSpace(row.ComponentLabel) ? DisplayLabels.Component(row.ComponentCode) : row.ComponentLabel)</td>
+                            <td>@DisplayLabels.CalculationMode(row.CalculationMode)</td>
+                            <td class="num">@row.QuantityNet.ToString("F3")</td>
+                            <td class="num">@row.QuantityGross.ToString("F3")</td>
+                            <td>@DisplayLabels.Unit(row.Unit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <h4>Totaux par composant</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Composant</th>
+                        <th>Classe</th>
+                        <th class="num">Net total</th>
+                        <th class="num">Brut total</th>
+                        <th>Unite</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var total in _result.ComponentTotals)
+                    {
+                        <tr>
+                            <td>@(string.IsNullOrWhiteSpace(total.ComponentLabel) ? DisplayLabels.Component(total.ComponentCode) : total.ComponentLabel)</td>
+                            <td>@DisplayLabels.CalculationMode(total.CalculationMode)</td>
+                            <td class="num">@total.TotalNet.ToString("F3")</td>
+                            <td class="num">@total.TotalGross.ToString("F3")</td>
+                            <td>@DisplayLabels.Unit(total.Unit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
+            <h3>Traces de calcul</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Variante</th>
+                        <th>Composant</th>
+                        <th>Classe</th>
+                        <th>Regle</th>
+                        <th class="num">Net</th>
+                        <th class="num">Brut</th>
+                        <th>Formule</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var trace in _result.Traces)
+                    {
+                        <tr>
+                            <td>@trace.VariantLabel</td>
+                            <td>@trace.ComponentCode</td>
+                            <td>@DisplayLabels.CalculationMode(trace.CalculationMode)</td>
+                            <td>@trace.RuleCode</td>
+                            <td class="num">@trace.QuantityNet.ToString("F3")</td>
+                            <td class="num">@trace.QuantityGross.ToString("F3")</td>
+                            <td>@trace.Formula</td>
+                        </tr>
+                        <tr class="trace-detail">
+                            <td colspan="7">
+                                base=@trace.BaseValue —
+                                qte commande=@trace.OrderQuantity —
+                                coeff. taille=@FormatCoeff(trace.SizeCoefficient) —
+                                coeff. couleur=@FormatCoeff(trace.ColorCoefficient) —
+                                perte=@trace.LossRate
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+}
+
+@code {
+    private IReadOnlyList<SalesOrderListItem> _orders = [];
+    private IReadOnlyList<FamilyListItem> _families = [];
+    private IReadOnlyList<SalesOrderLineItem> _orderLines = [];
+
+    private int _selectedOrderId;
+    private string _selectedFamilyCode = "PULL_COL_ROND";
+
+    private bool _isLoading = true;
+    private bool _isRunning;
+    private string? _loadError;
+    private string? _runError;
+    private CbnRunResult? _result;
+    private CalculationRunContext? _lastContext;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _orders = await CbnApplication.GetRealSalesOrdersAsync();
+            _families = await SimulationService.GetFamiliesAsync();
+
+            if (_orders.Count == 0)
+            {
+                _loadError = "Aucune commande. Lancez : python scripts/init_db.py";
+                return;
+            }
+
+            if (_families.Count == 0)
+            {
+                _loadError = "Aucune famille produit.";
+                return;
+            }
+
+            _selectedOrderId = _orders[0].Id;
+            if (!_families.Any(f => f.Code == _selectedFamilyCode))
+            {
+                _selectedFamilyCode = _families[0].Code;
+            }
+
+            await LoadOrderLinesAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OnOrderChanged()
+    {
+        _result = null;
+        await LoadOrderLinesAsync();
+    }
+
+    private async Task LoadOrderLinesAsync()
+    {
+        if (_selectedOrderId <= 0)
+        {
+            _orderLines = [];
+            return;
+        }
+
+        _orderLines = await CbnApplication.GetRealSalesOrderLinesAsync(_selectedOrderId);
+    }
+
+    private async Task RunCbnAsync()
+    {
+        _runError = null;
+        _isRunning = true;
+
+        try
+        {
+            var run = await CbnApplication.RunRealAsync(new CbnRunRequest(_selectedOrderId, _selectedFamilyCode));
+            _result = run.Result;
+            _lastContext = run.Context;
+        }
+        catch (Exception ex)
+        {
+            _runError = ex.Message;
+            _result = null;
+        }
+        finally
+        {
+            _isRunning = false;
+        }
+    }
+
+    private static string FormatCoeff(double? value) => value?.ToString("F2") ?? "—";
+}

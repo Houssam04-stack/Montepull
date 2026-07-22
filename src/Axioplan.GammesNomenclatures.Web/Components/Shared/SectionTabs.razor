@@ -1,0 +1,34 @@
+<nav class="section-tabs" aria-label="@AriaLabel">
+    @foreach (var tab in Tabs)
+    {
+        <a class="section-tab @(IsActive(tab) ? "active" : null)"
+           href="@tab.Href"
+           aria-current="@(IsActive(tab) ? "page" : null)">
+            @tab.Label
+        </a>
+    }
+</nav>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<SectionTabItem> Tabs { get; set; } = [];
+    [Parameter] public string? ActiveHref { get; set; }
+    [Parameter] public string AriaLabel { get; set; } = "Sections";
+
+    private bool IsActive(SectionTabItem tab)
+    {
+        if (string.IsNullOrWhiteSpace(ActiveHref))
+        {
+            return false;
+        }
+
+        var active = NormalizePath(ActiveHref);
+        var href = NormalizePath(tab.Href);
+        return active.Equals(href, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizePath(string href)
+    {
+        var path = href.Split('?', '#')[0].TrimEnd('/');
+        return string.IsNullOrEmpty(path) ? "/" : path;
+    }
+}

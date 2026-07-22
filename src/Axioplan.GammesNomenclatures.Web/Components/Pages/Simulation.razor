@@ -1,0 +1,315 @@
+@page "/"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Application.Simulation
+@inject GammesSimulationService GammesSimulationService
+
+<PageTitle>Simulation Gammes &amp; Nomenclatures</PageTitle>
+
+<h2>Simulation Gammes &amp; Nomenclatures</h2>
+<p class="lead">Mode simulation — articles et nomenclatures issus de Simulation MRP (aucun objet definitif CBN).</p>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <p>Chargement des articles Simulation MRP...</p>
+}
+else
+{
+    <section class="card">
+        <h3>Parametres</h3>
+
+        <div class="form-grid">
+            <div>
+                <label for="article">Article (Simulation MRP)</label>
+                <select id="article" class="form-control" @bind="_selectedArticleId">
+                    @foreach (var article in _articles)
+                    {
+                        <option value="@article.Id">@article.Code — @article.Designation</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <div class="checkbox-group">
+            <span class="group-label">Tailles</span>
+            @foreach (var option in _sizeOptions)
+            {
+                <label>
+                    <input type="checkbox"
+                           checked="@_selectedSizes.Contains(option.Size)"
+                           @onchange="e => OnSizeChanged(option.Size, e.Value)" />
+                    @option.Size (@option.Coefficient.ToString("F2"))
+                </label>
+            }
+        </div>
+
+        <div class="checkbox-group">
+            <span class="group-label">Couleurs</span>
+            @foreach (var option in _colorOptions)
+            {
+                <label>
+                    <input type="checkbox"
+                           checked="@_selectedColors.Contains(option.Color)"
+                           @onchange="e => OnColorChanged(option.Color, e.Value)" />
+                    @option.Color
+                </label>
+            }
+        </div>
+
+        <button class="btn-primary" @onclick="RunSimulationAsync" disabled="@_isSimulating">
+            @(_isSimulating ? "Simulation..." : "Simuler")
+        </button>
+
+        @if (!string.IsNullOrWhiteSpace(_simulationError))
+        {
+            <div class="alert alert-warning mt-3">@_simulationError</div>
+        }
+    </section>
+
+    @if (_result is not null && _result.Product is not null)
+    {
+        <section class="card summary-banner">
+            <h3>Resume de la simulation</h3>
+            <div class="summary-stats">
+                <div class="stat">
+                    <span class="stat-value">@_result.VariantCount</span>
+                    <span class="stat-label">combinaisons taille/couleur</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.BaseBom.Count</span>
+                    <span class="stat-label">composants BOM (M)</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.OperationCount</span>
+                    <span class="stat-label">operations gamme</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">@_result.TotalRoutingTimeMinutes.ToString("F0")</span>
+                    <span class="stat-label">min / piece</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h3>Contexte</h3>
+            <dl class="info-list">
+                <div><dt>Article</dt><dd class="wrap">@_result.Product.Code — @_result.Product.Designation</dd></div>
+                <div class="info-span-2"><dt>Nomenclature affichee</dt><dd>@_result.Product.BomLabel</dd></div>
+                <div class="info-span-2"><dt>Gamme affichee</dt><dd>@_result.Product.RoutingLabel</dd></div>
+                <div><dt>Tailles selectionnees</dt><dd>@string.Join(", ", _result.SelectedSizes)</dd></div>
+                <div><dt>Couleurs selectionnees</dt><dd>@string.Join(", ", _result.SelectedColors)</dd></div>
+            </dl>
+        </section>
+
+        <section class="card">
+            <h3>Resume BOM — produit de base taille M</h3>
+            <p class="hint">Nomenclature du template sans substitution couleur (tissu base). Coefficient taille M = 1,00.</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Composant</th>
+                        <th>Designation</th>
+                        <th class="num">Net / piece</th>
+                        <th class="num">Brut / piece</th>
+                        <th>Unite</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _result.BaseBom)
+                    {
+                        <tr>
+                            <td>@row.ComponentCode</td>
+                            <td>@DisplayLabels.Component(row.ComponentCode)</td>
+                            <td class="num">@row.QuantityNet.ToString("F3")</td>
+                            <td class="num">@row.QuantityGross.ToString("F3")</td>
+                            <td>@DisplayLabels.Unit(row.Unit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
+            <h3>Resume Gammes</h3>
+            <p>
+                @_result.OperationCount operations — temps total @_result.TotalRoutingTimeMinutes.ToString("F1") min/piece
+                (structure fichier prod, temps fictifs realistes).
+            </p>
+            <table class="routing-detail-table">
+                <thead>
+                    <tr>
+                        <th class="num">#</th>
+                        <th>Operation</th>
+                        <th>Centre de charge</th>
+                        <th class="num">Quantite</th>
+                        <th class="num">Temps (min)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var op in _result.RoutingOperations)
+                    {
+                        <tr>
+                            <td class="num">@op.OperationNumber</td>
+                            <td>@op.OperationName</td>
+                            <td>@op.WorkCenter</td>
+                            <td class="num">@op.Quantity.ToString("F3")</td>
+                            <td class="num">@op.TimeMinutes.ToString("F2")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card legend">
+            <h3>Donnees confirmees vs simulees</h3>
+            <p><strong>Confirme :</strong> composants et quantites BOM issus de Simulation MRP (seed PANTALON).</p>
+            <p><strong>Simule :</strong> structure de gamme inspiree du fichier prod (centres WU-*), temps d'operation fictifs en attendant import reel.</p>
+        </section>
+    }
+}
+
+@code {
+    private int _simulationId;
+    private IReadOnlyList<SimulationArticleDto> _articles = [];
+    private IReadOnlyList<DuplicationSizeOptionDto> _sizeOptions = [];
+    private IReadOnlyList<DuplicationColorOptionDto> _colorOptions = [];
+
+    private int _selectedArticleId;
+    private HashSet<string> _selectedSizes = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _selectedColors = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool _isLoading = true;
+    private bool _isSimulating;
+    private string? _loadError;
+    private string? _simulationError;
+    private SimulationResult? _result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var context = await GammesSimulationService.EnsureContextAsync();
+            _simulationId = context.SimulationId;
+            _articles = context.Articles;
+            ApplyDuplicationOptions(context.DuplicationOptions);
+
+            if (_articles.Count == 0)
+            {
+                _loadError = "Aucun article en simulation MRP. Ouvrez Simulation MRP et lancez Seed PANTALON.";
+                return;
+            }
+
+            var template = _articles.FirstOrDefault(a => a.IsTemplate)
+                           ?? _articles.FirstOrDefault(a => a.Code == "PANTALON_BASE")
+                           ?? _articles[0];
+            _selectedArticleId = template.Id;
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void ApplyDuplicationOptions(DuplicationOptionsDto options)
+    {
+        _sizeOptions = options.Sizes;
+        _colorOptions = options.Colors;
+        _selectedSizes = _sizeOptions
+            .Where(s => s.IsSelected)
+            .Select(s => s.Size)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _selectedColors = _colorOptions
+            .Where(c => c.IsSelected)
+            .Select(c => c.Color)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task RunSimulationAsync()
+    {
+        _simulationError = null;
+        _isSimulating = true;
+
+        try
+        {
+            var sizes = _sizeOptions
+                .Where(s => _selectedSizes.Contains(s.Size))
+                .Select(s => new SizeCoefficientInput(s.Size, s.Coefficient))
+                .ToList();
+            var colors = _colorOptions
+                .Where(c => _selectedColors.Contains(c.Color))
+                .Select(c => new ColorCoefficientInput(c.Color, c.Coefficient))
+                .ToList();
+
+            if (sizes.Count == 0 || colors.Count == 0)
+            {
+                _simulationError = "Selectionnez au moins une taille et une couleur.";
+                return;
+            }
+
+            if (_selectedArticleId <= 0)
+            {
+                _simulationError = "Choisissez un article.";
+                return;
+            }
+
+            var request = new GammesSimulationRequest(
+                _simulationId,
+                _selectedArticleId,
+                sizes,
+                colors);
+
+            await GammesSimulationService.SaveDuplicationOptionsAsync(new SaveDuplicationOptionsRequest(
+                _simulationId,
+                _sizeOptions.Select((s, index) => new DuplicationSizeOptionDto(
+                    s.Size,
+                    s.Coefficient,
+                    _selectedSizes.Contains(s.Size),
+                    index)).ToList(),
+                _colorOptions.Select((c, index) => new DuplicationColorOptionDto(
+                    c.Color,
+                    c.Coefficient,
+                    _selectedColors.Contains(c.Color),
+                    index)).ToList()));
+
+            _result = await GammesSimulationService.SimulateAsync(request);
+        }
+        catch (Exception ex)
+        {
+            _simulationError = ex.Message;
+        }
+        finally
+        {
+            _isSimulating = false;
+        }
+    }
+
+    private void OnSizeChanged(string code, object? value)
+    {
+        if (value is true)
+        {
+            _selectedSizes.Add(code);
+            return;
+        }
+
+        _selectedSizes.Remove(code);
+    }
+
+    private void OnColorChanged(string code, object? value)
+    {
+        if (value is true)
+        {
+            _selectedColors.Add(code);
+            return;
+        }
+
+        _selectedColors.Remove(code);
+    }
+}

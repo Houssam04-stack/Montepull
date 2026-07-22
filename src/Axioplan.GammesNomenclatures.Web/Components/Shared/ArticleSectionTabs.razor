@@ -1,0 +1,35 @@
+<nav class="section-tabs" aria-label="Sections articles">
+    @foreach (var tab in Tabs)
+    {
+        <a class="section-tab @(IsActive(tab.Href) ? "active" : null)" href="@tab.Href">@tab.Label</a>
+    }
+</nav>
+
+@code {
+    [Parameter] public string ActiveSection { get; set; } = "list";
+
+    private static readonly (string Label, string Section, string Href)[] Tabs =
+    [
+        ("Liste", "list", "/articles"),
+        ("Créer", "manual", "/articles/manual"),
+        ("Configurer", "configured", "/articles/configured"),
+        ("Catégories", "categories", "/articles/categories"),
+        ("Familles", "categories", "/articles/categories"),
+        ("Options", "attributes", "/articles/attributes"),
+        ("Format des codes", "attributes", "/articles/attributes")
+    ];
+
+    private bool IsActive(string href)
+    {
+        var section = ActiveSection.ToLowerInvariant();
+        return href switch
+        {
+            "/articles" => section is "list",
+            "/articles/manual" => section is "manual",
+            "/articles/configured" => section is "configured",
+            "/articles/categories" => section is "categories",
+            "/articles/attributes" => section is "attributes",
+            _ => false
+        };
+    }
+}

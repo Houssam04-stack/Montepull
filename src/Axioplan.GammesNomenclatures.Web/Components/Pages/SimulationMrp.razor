@@ -1,0 +1,1655 @@
+@page "/simulation-mrp"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Cbn
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Application.SimulationCbn
+@using Axioplan.GammesNomenclatures.Domain.Simulation
+@using Microsoft.AspNetCore.WebUtilities
+@inject SimulationOrchestrationService SimulationService
+@inject DuplicationService DuplicationService
+@inject ICbnApplicationService CbnApplication
+@inject NavigationManager Navigation
+
+<PageTitle>Simulation MRP — Duplication &amp; CBN</PageTitle>
+
+<h2>Simulation MRP</h2>
+<p class="lead">
+    Module isole (tables <code>sim_*</code>) : duplication taille/couleur puis CBN/MRP classique
+    (LLC, explosion controlee, besoin brut/net, OF/OA, pegging).
+</p>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Simulation</label>
+            <div class="inline-form">
+                <select class="form-control" @bind="_selectedSimulationId" @bind:after="OnSimulationChangedAsync">
+                    <option value="0">— choisir —</option>
+                    @foreach (var sim in _simulations)
+                    {
+                        <option value="@sim.Id">#@sim.Id — @sim.Name</option>
+                    }
+                </select>
+                <button type="button" class="btn-danger btn-sm" @onclick="DeleteSimulationAsync" disabled="@(_busy || _selectedSimulationId == 0)">Supprimer</button>
+            </div>
+        </div>
+        <div class="inline-form" style="align-items:end">
+            <input class="form-control" placeholder="Nom nouvelle simulation" @bind="_newSimulationName" @bind:event="oninput" />
+            <button class="btn-primary btn-sm" @onclick="CreateSimulationAsync" disabled="@_busy">Creer</button>
+        </div>
+    </div>
+</section>
+
+@if (_selectedSimulationId > 0)
+{
+    <div class="tabs">
+        <button type="button" class="tab-btn @(_activeTab == "duplication" ? "active" : null)" @onclick='() => _activeTab = "duplication"'>Duplication</button>
+        <button type="button" class="tab-btn @(_activeTab == "nomenclatures" ? "active" : null)" @onclick="SwitchToNomenclaturesTabAsync">Nomenclatures</button>
+        <button type="button" class="tab-btn @(_activeTab == "cbn" ? "active" : null)" @onclick='() => _activeTab = "cbn"'>CBN</button>
+    </div>
+
+    @if (_activeTab == "duplication")
+    {
+        <section class="card">
+            <h3>Duplication</h3>
+
+            <div class="form-grid">
+                <div>
+                    <label>Produit de base</label>
+                    <div class="inline-form">
+                        <input class="form-control" placeholder="Nom article (ex. PANTALON, ROBE)" @bind="_seedArticleName" @bind:event="oninput" />
+                        <button type="button" class="btn-secondary btn-sm" @onclick="SeedArticleAsync" disabled="@_busy">Initialiser</button>
+                    </div>
+                </div>
+                <div>
+                    <label>Template actif</label>
+                    <select class="form-control" @bind="_templateArticleId" @bind:after="OnTemplateArticleChangedAsync">
+                        <option value="0">— choisir —</option>
+                        @foreach (var art in _articles.Where(a => a.IsTemplate))
+                        {
+                            <option value="@art.Id">@art.Code — @art.Designation</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            <h4 style="margin-top:1.5rem">Nomenclature du produit de base</h4>
+            @if (_templateArticleId <= 0)
+            {
+                <div class="alert alert-warning" style="margin-top:0.75rem">
+                    Initialisez ou selectionnez un produit de base pour saisir la nomenclature.
+                </div>
+            }
+            else
+            {
+                var template = _articles.First(a => a.Id == _templateArticleId);
+                <p class="hint">
+                    <strong>@template.Code</strong> — @template.Designation
+                    (@TemplateBomLines.Count() composant@(TemplateBomLines.Count() > 1 ? "s" : ""))
+                </p>
+
+                <table class="dup-options-table">
+                    <thead>
+                        <tr>
+                            <th>Composant</th>
+                            <th class="num">Qty / parent</th>
+                            <th>Unite</th>
+                            <th>Coef. taille</th>
+                            <th>Subst. couleur</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var line in TemplateBomLines)
+                        {
+                            var edit = GetBomLineEdit(line);
+                            <tr>
+                                <td>@line.ComponentCode</td>
+                                <td class="num">
+                                    <input type="number" step="0.0001" min="0" class="form-control input-num"
+                                           @bind="edit.QuantityPer"
+                                           @onfocusout="() => SaveBomLineAsync(line, edit)" />
+                                </td>
+                                <td>
+                                    <select class="form-control" @bind="edit.Unit" @bind:after="() => SaveBomLineAsync(line, edit)">
+                                        @foreach (var unit in SimulationBomUnits.All)
+                                        {
+                                            <option value="@unit">@unit</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="edit.ApplySizeCoefficient" @bind:after="() => SaveBomLineAsync(line, edit)" />
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="edit.ApplyColorSubstitution" @bind:after="() => SaveBomLineAsync(line, edit)" />
+                                </td>
+                                <td>
+                                    <button type="button" class="btn-danger btn-sm" @onclick="() => DeleteBomLineAsync(line)" disabled="@_busy">Supprimer</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <div class="card" style="margin-top:1rem;padding:1rem;background:var(--surface-2, #f8f9fa)">
+                    <h5 style="margin-top:0">Ajouter un composant</h5>
+                    <div class="inline-form" style="margin-bottom:0.75rem">
+                        <label><input type="radio" name="compMode" checked="@_useExistingComponent" @onchange="() => _useExistingComponent = true" /> Existant</label>
+                        <label style="margin-left:1rem"><input type="radio" name="compMode" checked="@(!_useExistingComponent)" @onchange="() => _useExistingComponent = false" /> Nouveau</label>
+                    </div>
+                    @if (_useExistingComponent)
+                    {
+                        <div class="form-grid">
+                            <div>
+                                <label>Composant</label>
+                                <select class="form-control" @bind="_newComponentArticleId">
+                                    <option value="0">— choisir —</option>
+                                    @foreach (var comp in ComponentCandidates)
+                                    {
+                                        <option value="@comp.Id">@comp.Code — @comp.Designation</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="form-grid">
+                            <div>
+                                <label>Code composant</label>
+                                <input class="form-control" @bind="_newComponentCode" @bind:event="oninput" placeholder="ex. TISSU_BASE" />
+                            </div>
+                            <div>
+                                <label>Designation</label>
+                                <input class="form-control" @bind="_newComponentDesignation" @bind:event="oninput" placeholder="ex. Tissu principal" />
+                            </div>
+                            <div>
+                                <label>Approvisionnement</label>
+                                <select class="form-control" @bind="_newComponentProcurement">
+                                    <option value="@SimulationProcurementTypes.Purchased">Achete</option>
+                                    <option value="@SimulationProcurementTypes.Manufactured">Fabrique</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label>Delai (j)</label>
+                                <input type="number" min="0" class="form-control input-num" @bind="_newComponentLeadTime" />
+                            </div>
+                        </div>
+                    }
+                    <div class="form-grid" style="margin-top:0.75rem">
+                        <div>
+                            <label>Quantite / parent</label>
+                            <input type="number" step="0.0001" min="0" class="form-control input-num" @bind="_newBomQty" />
+                        </div>
+                        <div>
+                            <label>Unite</label>
+                            <select class="form-control" @bind="_newBomUnit">
+                                @foreach (var unit in SimulationBomUnits.All)
+                                {
+                                    <option value="@unit">@unit</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="inline-form" style="align-items:end">
+                            <label><input type="checkbox" @bind="_newBomSizeCoef" /> Coef. taille</label>
+                            <label><input type="checkbox" @bind="_newBomColorSub" /> Subst. couleur</label>
+                        </div>
+                    </div>
+                    <div style="margin-top:0.75rem">
+                        <button type="button" class="btn-primary btn-sm" @onclick="AddBomLineAsync" disabled="@_busy">+ Ajouter a la nomenclature</button>
+                    </div>
+                </div>
+            }
+
+            <h4 style="margin-top:2rem">Tailles</h4>
+            <p class="hint">Ajoutez/supprimez des tailles, saisissez le coefficient, puis cochez celles a dupliquer.</p>
+            <table class="dup-options-table">
+                <thead>
+                    <tr>
+                        <th>
+                            <input type="checkbox"
+                                   checked="@(_sizes.Count > 0 && _sizes.All(s => s.Selected))"
+                                   @onchange="ToggleAllSizes" />
+                        </th>
+                        <th>Taille</th>
+                        <th class="num">Coefficient</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var size in _sizes)
+                    {
+                        <tr>
+                            <td>
+                                <input type="checkbox" @bind="size.Selected" @bind:after="SaveDuplicationOptionsAsync" />
+                            </td>
+                            <td>
+                                <input class="form-control" @bind="size.Size" @bind:event="oninput" @bind:after="SaveDuplicationOptionsAsync" placeholder="ex. XXL" />
+                            </td>
+                            <td class="num">
+                                <input type="number" step="0.01" min="0.01" class="form-control input-num" @bind="size.Coefficient" @bind:after="SaveDuplicationOptionsAsync" />
+                            </td>
+                            <td>
+                                <button type="button" class="btn-danger btn-sm" @onclick="() => RemoveSize(size)" disabled="@_busy">Supprimer</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="inline-form" style="margin-top:0.5rem">
+                <input class="form-control" placeholder="Nouvelle taille" @bind="_newSizeName" @bind:event="oninput" />
+                <input type="number" step="0.01" min="0.01" class="form-control input-num" @bind="_newSizeCoefficient" title="Coefficient" />
+                <button type="button" class="btn-secondary btn-sm" @onclick="AddSize" disabled="@_busy">+ Taille</button>
+            </div>
+
+            <h4 style="margin-top:1.25rem">Couleurs</h4>
+            <p class="hint">Ajoutez/supprimez des couleurs, saisissez le coefficient, puis cochez celles a dupliquer.</p>
+            <table class="dup-options-table">
+                <thead>
+                    <tr>
+                        <th>
+                            <input type="checkbox"
+                                   checked="@(_colors.Count > 0 && _colors.All(c => c.Selected))"
+                                   @onchange="ToggleAllColors" />
+                        </th>
+                        <th>Couleur</th>
+                        <th class="num">Coefficient</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var color in _colors)
+                    {
+                        <tr>
+                            <td>
+                                <input type="checkbox" @bind="color.Selected" @bind:after="SaveDuplicationOptionsAsync" />
+                            </td>
+                            <td>
+                                <input class="form-control" @bind="color.Color" @bind:event="oninput" @bind:after="SaveDuplicationOptionsAsync" placeholder="ex. Vert sauge" />
+                            </td>
+                            <td class="num">
+                                <input type="number" step="0.01" min="0.01" class="form-control input-num" @bind="color.Coefficient" @bind:after="SaveDuplicationOptionsAsync" />
+                            </td>
+                            <td>
+                                <button type="button" class="btn-danger btn-sm" @onclick="() => RemoveColor(color)" disabled="@_busy">Supprimer</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="inline-form" style="margin-top:0.5rem">
+                <input class="form-control" placeholder="Nouvelle couleur" @bind="_newColorName" @bind:event="oninput" />
+                <input type="number" step="0.01" min="0.01" class="form-control input-num" @bind="_newColorCoefficient" title="Coefficient" />
+                <button type="button" class="btn-secondary btn-sm" @onclick="AddColor" disabled="@_busy">+ Couleur</button>
+            </div>
+
+            <div class="inline-form" style="margin-top:1rem">
+                <button class="btn-primary" @onclick="GenerateVariantsAsync" disabled="@_busy">
+                    Generer variantes (@(_sizes.Count(s => s.Selected) * _colors.Count(c => c.Selected)))
+                </button>
+            </div>
+
+            <h4>Articles generes</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Taille</th>
+                        <th>Couleur</th>
+                        <th>Type</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var art in _articles.Where(a => a.IsGenerated))
+                    {
+                        <tr>
+                            <td>@art.Code</td>
+                            <td>@art.Size</td>
+                            <td>@art.Color</td>
+                            <td>@art.ProcurementType</td>
+                            <td>
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => OpenCbnForArticle(art)">Simuler CBN</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <h4>BOM (toutes variantes de la simulation)</h4>
+            <table>
+                <thead>
+                    <tr><th>Parent</th><th>Type</th><th>Composant</th><th class="num">Qty/par</th><th>Unite</th><th>Alt.</th><th>Size coef</th><th>Subst. couleur</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in _bomLines)
+                    {
+                        <tr>
+                            <td>@line.ParentCode</td>
+                            <td>@line.NomenclatureType</td>
+                            <td>@line.ComponentCode</td>
+                            <td class="num">@line.QuantityPer.ToString("F4")</td>
+                            <td>@line.ComponentUnit</td>
+                            <td class="num">@line.Alternative</td>
+                            <td>@(line.ApplySizeCoefficient ? "oui" : "non")</td>
+                            <td>@(line.ApplyColorSubstitution ? "oui" : "non")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+    else if (_activeTab == "nomenclatures")
+    {
+        <section class="card">
+            <h3>Nomenclatures achat / production</h3>
+            <p class="hint">Choisissez un produit de base existant. Les nomenclatures achat (alternative 10) et production (alternative 20) sont generees a partir de la nomenclature de base et restent entierement modifiables.</p>
+
+            <div class="form-grid">
+                <div>
+                    <label>Produit de base</label>
+                    <select class="form-control" @bind="_nomBaseArticleId" @bind:after="OnNomBaseArticleChangedAsync">
+                        <option value="0">— choisir —</option>
+                        @foreach (var art in _articles.Where(a => a.IsTemplate))
+                        {
+                            <option value="@art.Id">@art.Code — @art.Designation</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            @if (_nomBaseArticleId <= 0)
+            {
+                <div class="alert alert-warning" style="margin-top:0.75rem">
+                    Selectionnez un produit de base. Definissez d'abord sa nomenclature dans l'onglet Duplication si besoin.
+                </div>
+            }
+            else if (!BaseBomLines.Any())
+            {
+                <div class="alert alert-warning" style="margin-top:0.75rem">
+                    Ce produit n'a pas encore de nomenclature de base. Ajoutez des composants dans l'onglet Duplication.
+                </div>
+            }
+            else
+            {
+                var nomTemplate = _articles.First(a => a.Id == _nomBaseArticleId);
+
+                <h4 style="margin-top:1.5rem">Nomenclature achat</h4>
+                <p class="hint"><strong>@nomTemplate.Code</strong> — alternative par defaut 10</p>
+                @RenderEditableBomTable(AchatBomLines, showAlternative: true)
+
+                <h4 style="margin-top:2rem">Nomenclature production</h4>
+                <p class="hint"><strong>@nomTemplate.Code</strong> — alternative par defaut 20</p>
+                @RenderEditableBomTable(ProductionBomLines, showAlternative: true)
+            }
+        </section>
+    }
+    else
+    {
+        <section class="card">
+            <h3>Tab CBN</h3>
+            <div class="form-grid">
+                <div>
+                    <label>Article a calculer</label>
+                    <select class="form-control" @bind="_cbnArticleId">
+                        @foreach (var art in _articles.Where(a => a.IsGenerated || a.ArticleType == "FinishedGood"))
+                        {
+                            <option value="@art.Id">@art.Code</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label>No commande client</label>
+                    <input class="form-control" @bind="_orderNumber" @bind:event="oninput" />
+                </div>
+                <div>
+                    <label>Client</label>
+                    <input class="form-control" @bind="_customerName" @bind:event="oninput" />
+                </div>
+                <div>
+                    <label>Quantite</label>
+                    <input type="number" class="form-control input-num" @bind="_orderQty" />
+                </div>
+                <div>
+                    <label>Date besoin</label>
+                    <input type="date" class="form-control" @bind="_requestedDate" />
+                </div>
+            </div>
+
+            <h4>Parametres CBN simules (modifiables)</h4>
+            <p class="hint">Composants et matieres uniquement — les produits de base et leurs variantes ne figurent pas ici.</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Article</th>
+                        <th class="num">Stock</th>
+                        <th class="num">Secu</th>
+                        <th class="num">Reserve</th>
+                        <th class="num">Encours OF</th>
+                        <th class="num">Achats NR</th>
+                        <th class="num">Delai</th>
+                        <th>Lot</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in EditableCbnParameters)
+                    {
+                        <tr>
+                            <td>@p.ArticleCode</td>
+                            <td class="num"><input type="number" class="form-control input-num" @bind="_paramEdits[p.ArticleId].OnHandStock" /></td>
+                            <td class="num"><input type="number" class="form-control input-num" @bind="_paramEdits[p.ArticleId].SafetyStock" /></td>
+                            <td class="num"><input type="number" class="form-control input-num" @bind="_paramEdits[p.ArticleId].ReservedQuantity" /></td>
+                            <td class="num"><input type="number" class="form-control input-num" @bind="_paramEdits[p.ArticleId].ScheduledReceiptProduction" /></td>
+                            <td class="num"><input type="number" class="form-control input-num" @bind="_paramEdits[p.ArticleId].ScheduledReceiptPurchase" /></td>
+                            <td class="num"><input type="number" class="form-control input-num" @bind="_paramEdits[p.ArticleId].LeadTimeDays" /></td>
+                            <td>
+                                <select class="form-control" @bind="_paramEdits[p.ArticleId].LotRule">
+                                    <option value="@SimulationLotRules.LotForLot">LotForLot</option>
+                                    <option value="@SimulationLotRules.FixedQuantity">FixedQuantity</option>
+                                    <option value="@SimulationLotRules.MinimumQuantity">MinimumQuantity</option>
+                                    <option value="@SimulationLotRules.MultipleQuantity">MultipleQuantity</option>
+                                </select>
+                            </td>
+                            <td>
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveParamAsync(p.ArticleId)" disabled="@_busy">OK</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <div class="inline-form" style="margin-top:1rem">
+                <button class="btn-primary" @onclick="RunCbnAsync" disabled="@_busy">Lancer calcul CBN</button>
+            </div>
+
+            <h4 style="margin-top:2rem">Historique des calculs CBN</h4>
+            @if (_cbnHistory.Count == 0)
+            {
+                <p class="hint">Aucun calcul enregistré pour cette simulation.</p>
+            }
+            else
+            {
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Article</th>
+                            <th>Commande</th>
+                            <th>Client</th>
+                            <th class="num">Qté</th>
+                            <th>Date besoin</th>
+                            <th class="num">Ordres</th>
+                            <th class="num">Alertes</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var run in _cbnHistory)
+                        {
+                            <tr class="@(run.Id == _selectedRunId ? "row-selected" : null)">
+                                <td>@run.RunAt.ToLocalTime().ToString("g")</td>
+                                <td>@run.ArticleCode</td>
+                                <td>@run.CustomerOrderNumber</td>
+                                <td>@run.CustomerName</td>
+                                <td class="num">@run.Quantity.ToString("F0")</td>
+                                <td>@run.RequestedDate</td>
+                                <td class="num">@run.PlannedOrderCount</td>
+                                <td class="num">@run.AlertCount</td>
+                                <td>
+                                    <button type="button" class="btn-secondary btn-sm" @onclick="() => LoadCbnRunAsync(run.Id)" disabled="@_busy">Voir</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        @if (_cbnResult is not null)
+        {
+            <div class="tabs">
+                <button type="button" class="tab-btn @(_resultTab == "flat" ? "active" : null)" @onclick='() => _resultTab = "flat"'>BOM aplatie</button>
+                <button type="button" class="tab-btn @(_resultTab == "gross" ? "active" : null)" @onclick='() => _resultTab = "gross"'>Besoins bruts</button>
+                <button type="button" class="tab-btn @(_resultTab == "net" ? "active" : null)" @onclick='() => _resultTab = "net"'>Besoins nets</button>
+                <button type="button" class="tab-btn @(_resultTab == "orders" ? "active" : null)" @onclick='() => _resultTab = "orders"'>Ordres</button>
+                <button type="button" class="tab-btn @(_resultTab == "wo" ? "active" : null)" @onclick='() => _resultTab = "wo"'>OF</button>
+                <button type="button" class="tab-btn @(_resultTab == "peg" ? "active" : null)" @onclick='() => _resultTab = "peg"'>Pegging</button>
+                <button type="button" class="tab-btn @(_resultTab == "trace" ? "active" : null)" @onclick='() => _resultTab = "trace"'>Traçabilité</button>
+                <button type="button" class="tab-btn @(_resultTab == "alerts" ? "active" : null)" @onclick='() => _resultTab = "alerts"'>Alertes</button>
+            </div>
+
+            <section class="card">
+                @if (_resultTab == "flat")
+                {
+                    <table>
+                        <thead><tr><th>Niv</th><th>Parent</th><th>Composant</th><th class="num">Qty/par</th><th class="num">Cumul</th><th>Date</th><th>Chemin</th></tr></thead>
+                        <tbody>
+                        @foreach (var row in _cbnResult.FlatBomLines)
+                        {
+                            <tr>
+                                <td>@row.Level</td>
+                                <td>@row.ParentArticleCode</td>
+                                <td>@row.ComponentArticleCode</td>
+                                <td class="num">@row.QuantityPer.ToString("F4")</td>
+                                <td class="num">@row.CumulativeQuantity.ToString("F4")</td>
+                                <td>@row.NeedDate</td>
+                                <td class="subtle">@row.Path</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                else if (_resultTab == "gross")
+                {
+                    <table>
+                        <thead><tr><th>Article</th><th>Niv</th><th class="num">Brut</th><th>Date</th><th>Source</th><th>Chemin</th></tr></thead>
+                        <tbody>
+                        @foreach (var row in _cbnResult.GrossRequirements)
+                        {
+                            <tr>
+                                <td>@row.ArticleCode</td>
+                                <td>@row.Level</td>
+                                <td class="num">@row.GrossQuantity.ToString("F3")</td>
+                                <td>@row.NeedDate</td>
+                                <td>@row.SourceType</td>
+                                <td class="subtle">@row.Path</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                else if (_resultTab == "net")
+                {
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Article</th><th class="num">Brut</th><th class="num">Stock</th><th class="num">Secu</th>
+                                <th class="num">Reserve</th><th class="num">Encours</th><th class="num">Achats</th><th class="num">Net</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var row in _cbnResult.NetRequirements)
+                        {
+                            <tr>
+                                <td>@row.ArticleCode</td>
+                                <td class="num">@row.GrossRequirement.ToString("F3")</td>
+                                <td class="num">@row.OnHandStock.ToString("F3")</td>
+                                <td class="num">@row.SafetyStock.ToString("F3")</td>
+                                <td class="num">@row.ReservedQuantity.ToString("F3")</td>
+                                <td class="num">@row.ScheduledReceiptProduction.ToString("F3")</td>
+                                <td class="num">@row.ScheduledReceiptPurchase.ToString("F3")</td>
+                                <td class="num"><strong>@row.NetRequirement.ToString("F3")</strong></td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                else if (_resultTab == "orders")
+                {
+                    <table class="orders-result-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Article</th>
+                                <th class="num">Qte</th>
+                                <th>POR (lancement)</th>
+                                <th>PORec (reception)</th>
+                                <th>Source</th>
+                                <th>Justification</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var row in _cbnResult.PlannedOrders)
+                        {
+                            <tr>
+                                <td><strong>@row.OrderType</strong></td>
+                                <td>@row.ArticleCode</td>
+                                <td class="num">@row.Quantity.ToString("F3")</td>
+                                <td>@row.ReleaseDate</td>
+                                <td>@row.ReceiptDate</td>
+                                <td>@row.Source</td>
+                                <td class="order-justification">@row.Justification</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                else if (_resultTab == "wo")
+                {
+                    <table>
+                        <thead><tr><th>Article</th><th class="num">Qte</th><th>Debut</th><th>Fin</th><th>Statut</th></tr></thead>
+                        <tbody>
+                        @foreach (var row in _cbnResult.WorkOrders)
+                        {
+                            <tr>
+                                <td>@row.ArticleCode</td>
+                                <td class="num">@row.Quantity.ToString("F3")</td>
+                                <td>@row.StartDate</td>
+                                <td>@row.EndDate</td>
+                                <td>@row.Status</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                else if (_resultTab == "peg")
+                {
+                    @foreach (var node in _cbnResult.PeggingTree)
+                    {
+                        @RenderPegging(node, 0)
+                    }
+                }
+                else if (_resultTab == "trace")
+                {
+                    <p class="hint">Calcul #@_cbnResult.RunId — détail brut → net → ordre par article (ordre LLC).</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Niv</th>
+                                <th>Article</th>
+                                <th class="num">Brut</th>
+                                <th class="num">Stock</th>
+                                <th class="num">Secu</th>
+                                <th class="num">Reserve</th>
+                                <th class="num">Encours</th>
+                                <th class="num">Achats</th>
+                                <th class="num">Net</th>
+                                <th>Ordre</th>
+                                <th class="num">Qte ordre</th>
+                                <th>POR</th>
+                                <th>PORec</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var step in _cbnResult.TraceSteps)
+                        {
+                            <tr>
+                                <td>@step.Level</td>
+                                <td>@step.ArticleCode</td>
+                                <td class="num">@step.GrossRequirement.ToString("F3")</td>
+                                <td class="num">@step.OnHandStock.ToString("F3")</td>
+                                <td class="num">@step.SafetyStock.ToString("F3")</td>
+                                <td class="num">@step.ReservedQuantity.ToString("F3")</td>
+                                <td class="num">@step.ScheduledReceiptProduction.ToString("F3")</td>
+                                <td class="num">@step.ScheduledReceiptPurchase.ToString("F3")</td>
+                                <td class="num"><strong>@step.NetRequirement.ToString("F3")</strong></td>
+                                <td>@(step.OrderType ?? "—")</td>
+                                <td class="num">@(step.PlannedQuantity?.ToString("F3") ?? "—")</td>
+                                <td>@(step.ReleaseDate?.ToString() ?? "—")</td>
+                                <td>@(step.ReceiptDate?.ToString() ?? "—")</td>
+                            </tr>
+                            @if (!string.IsNullOrWhiteSpace(step.Justification) || !string.IsNullOrWhiteSpace(step.Path))
+                            {
+                                <tr class="trace-detail">
+                                    <td colspan="13" class="subtle">
+                                        @if (!string.IsNullOrWhiteSpace(step.Justification))
+                                        {
+                                            <span>@step.Justification</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(step.Path))
+                                        {
+                                            <span> — chemin: @step.Path</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        }
+                        </tbody>
+                    </table>
+                }
+                else
+                {
+                    @if (_cbnResult.Alerts.Count == 0)
+                    {
+                        <p class="subtle">Aucune alerte.</p>
+                    }
+                    else
+                    {
+                        <table>
+                            <thead><tr><th>Severite</th><th>Type</th><th>Article</th><th>Message</th></tr></thead>
+                            <tbody>
+                            @foreach (var alert in _cbnResult.Alerts)
+                            {
+                                <tr>
+                                    <td>@alert.Severity</td>
+                                    <td>@alert.AlertType</td>
+                                    <td>@alert.ArticleCode</td>
+                                    <td>@alert.Message</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    }
+                }
+            </section>
+        }
+    }
+}
+
+@code {
+    private bool _busy;
+    private string? _error;
+    private string? _message;
+    private string _activeTab = "duplication";
+    private string _resultTab = "flat";
+
+    private List<SimulationHeaderDto> _simulations = [];
+    private int _selectedSimulationId;
+    private string _newSimulationName = "Demo Pantalon";
+    private string _seedArticleName = "PANTALON";
+
+    private List<SimulationArticleDto> _articles = [];
+    private List<SimulationBomLineDto> _bomLines = [];
+    private readonly Dictionary<int, BomLineEdit> _bomLineEdits = [];
+    private List<SimulationCbnParameterDto> _parameters = [];
+    private readonly Dictionary<int, ParamEdit> _paramEdits = [];
+
+    private int _templateArticleId;
+    private int _nomBaseArticleId;
+    private List<SizeEdit> _sizes = [];
+    private List<ColorEdit> _colors = [];
+    private string _newSizeName = string.Empty;
+    private double _newSizeCoefficient = 1.0;
+    private string _newColorName = string.Empty;
+    private double _newColorCoefficient = 1.0;
+
+    private bool _useExistingComponent = true;
+    private int _newComponentArticleId;
+    private string _newComponentCode = string.Empty;
+    private string _newComponentDesignation = string.Empty;
+    private string _newComponentProcurement = SimulationProcurementTypes.Purchased;
+    private int _newComponentLeadTime = 2;
+    private double _newBomQty = 1;
+    private string _newBomUnit = SimulationBomUnits.Un;
+    private bool _newBomSizeCoef;
+    private bool _newBomColorSub;
+
+    private int _cbnArticleId;
+    private string _orderNumber = "CMD001";
+    private string _customerName = "Client Demo";
+    private double _orderQty = 100;
+    private DateTime _requestedDate = new(2026, 7, 30);
+    private CbnRunResultDto? _cbnResult;
+    private List<SimCbnRunHistoryDto> _cbnHistory = [];
+    private int _selectedRunId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await SimulationService.EnsureSchemaAsync();
+            _simulations = (await SimulationService.ListAsync()).ToList();
+            if (_simulations.Count > 0)
+            {
+                _selectedSimulationId = ResolveSimulationIdFromUri() ?? _simulations[0].Id;
+                SyncSimulationUri();
+                await LoadSimulationDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private int? ResolveSimulationIdFromUri()
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        if (!QueryHelpers.ParseQuery(uri.Query).TryGetValue("simulationId", out var value))
+        {
+            return null;
+        }
+
+        if (!int.TryParse(value.FirstOrDefault(), out var simulationId))
+        {
+            return null;
+        }
+
+        return _simulations.Any(s => s.Id == simulationId) ? simulationId : null;
+    }
+
+    private void SyncSimulationUri()
+    {
+        if (_selectedSimulationId <= 0)
+        {
+            return;
+        }
+
+        var uri = Navigation.GetUriWithQueryParameter("simulationId", _selectedSimulationId);
+        if (!string.Equals(uri, Navigation.Uri, StringComparison.OrdinalIgnoreCase))
+        {
+            Navigation.NavigateTo(uri, replace: true);
+        }
+    }
+
+    private async Task CreateSimulationAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var created = await SimulationService.CreateAsync(new CreateSimulationRequest(_newSimulationName, "Simulation MRP isolee"));
+            _simulations = (await SimulationService.ListAsync()).ToList();
+            _selectedSimulationId = created.Id;
+            await SimulationService.EnsureDefaultDuplicationOptionsAsync(_selectedSimulationId);
+            SyncSimulationUri();
+            await LoadSimulationDataAsync();
+            _message = $"Simulation #{created.Id} creee.";
+        });
+    }
+
+    private async Task DeleteSimulationAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var deletedId = _selectedSimulationId;
+            var deletedName = _simulations.FirstOrDefault(s => s.Id == deletedId)?.Name ?? $"#{deletedId}";
+            await SimulationService.DeleteAsync(deletedId);
+            _simulations = (await SimulationService.ListAsync()).ToList();
+            _selectedSimulationId = _simulations.FirstOrDefault()?.Id ?? 0;
+            _cbnResult = null;
+            _articles = [];
+            _bomLines = [];
+            _parameters = [];
+            _paramEdits.Clear();
+            _bomLineEdits.Clear();
+            _templateArticleId = 0;
+            _sizes = [];
+            _colors = [];
+            if (_selectedSimulationId > 0)
+            {
+                await LoadSimulationDataAsync();
+            }
+
+            SyncSimulationUri();
+            _message = $"Simulation {deletedName} supprimee.";
+        });
+    }
+
+    private async Task SeedArticleAsync()
+    {
+        await RunAsync(async () =>
+        {
+            if (string.IsNullOrWhiteSpace(_seedArticleName))
+            {
+                throw new InvalidOperationException("Saisissez le nom de l'article a initialiser.");
+            }
+
+            var result = await SimulationService.SeedTemplateArticleAsync(
+                new SeedTemplateArticleRequest(_selectedSimulationId, _seedArticleName.Trim()));
+            await LoadSimulationDataAsync();
+            _templateArticleId = result.ArticleId;
+            SyncBomLineEdits();
+            _message = result.AlreadyExisted
+                ? $"Article {result.ArticleCode} deja present — nomenclature editable ci-dessous."
+                : SimulationArticleNaming.IsPantalonDemoSeed(_seedArticleName)
+                    ? $"Demo {result.ArticleCode} chargee (BOM, gamme, substitutions, params)."
+                    : $"Template {result.ArticleCode} cree — ajoutez la nomenclature ci-dessous.";
+            _activeTab = "duplication";
+        });
+    }
+
+    private Task OnTemplateArticleChangedAsync()
+    {
+        SyncBomLineEdits();
+        return Task.CompletedTask;
+    }
+
+    private IEnumerable<SimulationBomLineDto> TemplateBomLines =>
+        _bomLines.Where(b => b.ParentArticleId == _templateArticleId
+            && string.Equals(b.NomenclatureType, SimulationNomenclatureTypes.Base, StringComparison.Ordinal));
+
+    private IEnumerable<SimulationBomLineDto> BaseBomLines =>
+        _bomLines.Where(b => b.ParentArticleId == _nomBaseArticleId
+            && string.Equals(b.NomenclatureType, SimulationNomenclatureTypes.Base, StringComparison.Ordinal));
+
+    private IEnumerable<SimulationBomLineDto> AchatBomLines =>
+        _bomLines.Where(b => b.ParentArticleId == _nomBaseArticleId
+            && string.Equals(b.NomenclatureType, SimulationNomenclatureTypes.Achat, StringComparison.Ordinal));
+
+    private IEnumerable<SimulationBomLineDto> ProductionBomLines =>
+        _bomLines.Where(b => b.ParentArticleId == _nomBaseArticleId
+            && string.Equals(b.NomenclatureType, SimulationNomenclatureTypes.Production, StringComparison.Ordinal));
+
+    private IEnumerable<SimulationArticleDto> ComponentCandidates =>
+        _articles.Where(a => a.Id != _templateArticleId && !a.IsGenerated);
+
+    private bool IsEditableCbnParameter(int articleId)
+    {
+        var article = _articles.FirstOrDefault(a => a.Id == articleId);
+        return article is not null && !article.IsTemplate && !article.IsGenerated;
+    }
+
+    private IEnumerable<SimulationCbnParameterDto> EditableCbnParameters =>
+        _parameters.Where(p => IsEditableCbnParameter(p.ArticleId));
+
+    private BomLineEdit GetBomLineEdit(SimulationBomLineDto line)
+    {
+        if (!_bomLineEdits.TryGetValue(line.Id, out var edit))
+        {
+            edit = new BomLineEdit
+            {
+                QuantityPer = line.QuantityPer,
+                Unit = line.ComponentUnit,
+                Alternative = line.Alternative,
+                ApplySizeCoefficient = line.ApplySizeCoefficient,
+                ApplyColorSubstitution = line.ApplyColorSubstitution
+            };
+            _bomLineEdits[line.Id] = edit;
+        }
+
+        return edit;
+    }
+
+    private void SyncBomLineEdits()
+    {
+        _bomLineEdits.Clear();
+        var editableLines = TemplateBomLines
+            .Concat(_nomBaseArticleId > 0 ? AchatBomLines.Concat(ProductionBomLines) : []);
+        foreach (var line in editableLines)
+        {
+            _bomLineEdits[line.Id] = new BomLineEdit
+            {
+                QuantityPer = line.QuantityPer,
+                Unit = line.ComponentUnit,
+                Alternative = line.Alternative,
+                ApplySizeCoefficient = line.ApplySizeCoefficient,
+                ApplyColorSubstitution = line.ApplyColorSubstitution
+            };
+        }
+    }
+
+    private async Task SwitchToNomenclaturesTabAsync()
+    {
+        _activeTab = "nomenclatures";
+        if (_nomBaseArticleId <= 0 && _templateArticleId > 0)
+        {
+            _nomBaseArticleId = _templateArticleId;
+        }
+
+        await OnNomBaseArticleChangedAsync();
+    }
+
+    private async Task OnNomBaseArticleChangedAsync()
+    {
+        if (_selectedSimulationId <= 0 || _nomBaseArticleId <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await SimulationService.EnsureAlternativeNomenclaturesAsync(_selectedSimulationId, _nomBaseArticleId);
+            await ReloadNomenclatureFromDbAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private RenderFragment RenderEditableBomTable(IEnumerable<SimulationBomLineDto> lines, bool showAlternative) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "table");
+        builder.AddAttribute(seq++, "class", "dup-options-table");
+        builder.OpenElement(seq++, "thead");
+        builder.OpenElement(seq++, "tr");
+        foreach (var header in showAlternative
+            ? new[] { "Composant", "Qty / parent", "Unite", "Alternative", "Coef. taille", "Subst. couleur", "" }
+            : new[] { "Composant", "Qty / parent", "Unite", "Coef. taille", "Subst. couleur", "" })
+        {
+            builder.OpenElement(seq++, "th");
+            builder.AddContent(seq++, header);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(seq++, "tbody");
+        foreach (var line in lines)
+        {
+            var edit = GetBomLineEdit(line);
+            builder.OpenElement(seq++, "tr");
+            builder.OpenElement(seq++, "td");
+            builder.AddContent(seq++, line.ComponentCode);
+            builder.CloseElement();
+            builder.OpenElement(seq++, "td");
+            builder.AddAttribute(seq++, "class", "num");
+            builder.OpenElement(seq++, "input");
+            builder.AddAttribute(seq++, "type", "number");
+            builder.AddAttribute(seq++, "step", "0.0001");
+            builder.AddAttribute(seq++, "min", "0");
+            builder.AddAttribute(seq++, "class", "form-control input-num");
+            builder.AddAttribute(seq++, "value", edit.QuantityPer);
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, async e =>
+            {
+                if (double.TryParse(e.Value?.ToString(), out var qty))
+                {
+                    edit.QuantityPer = qty;
+                    await SaveBomLineAsync(line, edit);
+                }
+            }));
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.OpenElement(seq++, "td");
+            builder.OpenElement(seq++, "select");
+            builder.AddAttribute(seq++, "class", "form-control");
+            builder.AddAttribute(seq++, "value", edit.Unit);
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, async e =>
+            {
+                edit.Unit = e.Value?.ToString() ?? SimulationBomUnits.Un;
+                await SaveBomLineAsync(line, edit);
+            }));
+            foreach (var unit in SimulationBomUnits.All)
+            {
+                builder.OpenElement(seq++, "option");
+                builder.AddAttribute(seq++, "value", unit);
+                builder.AddContent(seq++, unit);
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+            builder.CloseElement();
+            if (showAlternative)
+            {
+                builder.OpenElement(seq++, "td");
+                builder.AddAttribute(seq++, "class", "num");
+                builder.OpenElement(seq++, "input");
+                builder.AddAttribute(seq++, "type", "number");
+                builder.AddAttribute(seq++, "step", "1");
+                builder.AddAttribute(seq++, "class", "form-control input-num");
+                builder.AddAttribute(seq++, "value", edit.Alternative);
+                builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, async e =>
+                {
+                    if (int.TryParse(e.Value?.ToString(), out var alt))
+                    {
+                        edit.Alternative = alt;
+                        await SaveBomLineAsync(line, edit);
+                    }
+                }));
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+            builder.OpenElement(seq++, "td");
+            builder.OpenElement(seq++, "input");
+            builder.AddAttribute(seq++, "type", "checkbox");
+            builder.AddAttribute(seq++, "checked", edit.ApplySizeCoefficient);
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, async e =>
+            {
+                edit.ApplySizeCoefficient = e.Value is bool b && b;
+                await SaveBomLineAsync(line, edit);
+            }));
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.OpenElement(seq++, "td");
+            builder.OpenElement(seq++, "input");
+            builder.AddAttribute(seq++, "type", "checkbox");
+            builder.AddAttribute(seq++, "checked", edit.ApplyColorSubstitution);
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, async e =>
+            {
+                edit.ApplyColorSubstitution = e.Value is bool b && b;
+                await SaveBomLineAsync(line, edit);
+            }));
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.OpenElement(seq++, "td");
+            builder.OpenElement(seq++, "button");
+            builder.AddAttribute(seq++, "type", "button");
+            builder.AddAttribute(seq++, "class", "btn-danger btn-sm");
+            builder.AddAttribute(seq++, "disabled", _busy);
+            builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => DeleteBomLineAsync(line)));
+            builder.AddContent(seq++, "Supprimer");
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private async Task ReloadNomenclatureFromDbAsync()
+    {
+        if (_selectedSimulationId <= 0)
+        {
+            return;
+        }
+
+        var previousTemplateId = _templateArticleId;
+        var previousNomId = _nomBaseArticleId;
+        _articles = (await SimulationService.GetArticlesAsync(_selectedSimulationId)).ToList();
+        _bomLines = (await SimulationService.GetBomLinesAsync(_selectedSimulationId)).ToList();
+
+        if (previousTemplateId > 0 && _articles.Any(a => a.Id == previousTemplateId))
+        {
+            _templateArticleId = previousTemplateId;
+        }
+
+        if (previousNomId > 0 && _articles.Any(a => a.Id == previousNomId))
+        {
+            _nomBaseArticleId = previousNomId;
+        }
+
+        SyncBomLineEdits();
+    }
+
+    private async Task SaveBomLineAsync(SimulationBomLineDto line, BomLineEdit edit)
+    {
+        if (_selectedSimulationId <= 0 || line.ParentArticleId <= 0)
+        {
+            return;
+        }
+
+        if (edit.QuantityPer < 0)
+        {
+            _error = "La quantite ne peut pas etre negative.";
+            return;
+        }
+
+        _error = null;
+        try
+        {
+            await SimulationService.UpsertSimBomLineAsync(new UpsertSimBomLineRequest(
+                _selectedSimulationId,
+                line.ParentArticleId,
+                line.Id,
+                line.ComponentArticleId,
+                edit.QuantityPer,
+                line.ScrapRate,
+                line.OffsetDays,
+                edit.ApplySizeCoefficient,
+                edit.ApplyColorSubstitution,
+                edit.Unit,
+                line.NomenclatureType,
+                edit.Alternative));
+            await ReloadNomenclatureFromDbAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task DeleteBomLineAsync(SimulationBomLineDto line)
+    {
+        await RunAsync(async () =>
+        {
+            await SimulationService.DeleteSimBomLineAsync(new DeleteSimBomLineRequest(_selectedSimulationId, line.Id));
+            await ReloadNomenclatureFromDbAsync();
+            _message = $"Composant {line.ComponentCode} retire de la nomenclature (enregistre en base).";
+        });
+    }
+
+    private async Task AddBomLineAsync()
+    {
+        await RunAsync(async () =>
+        {
+            if (_templateArticleId <= 0)
+            {
+                throw new InvalidOperationException("Choisissez un article template.");
+            }
+
+            var componentId = _newComponentArticleId;
+            if (_useExistingComponent)
+            {
+                if (componentId <= 0)
+                {
+                    throw new InvalidOperationException("Choisissez un composant existant.");
+                }
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(_newComponentCode))
+                {
+                    throw new InvalidOperationException("Le code du nouveau composant est requis.");
+                }
+
+                var created = await SimulationService.CreateSimArticleAsync(new CreateSimArticleRequest(
+                    _selectedSimulationId,
+                    _newComponentCode.Trim(),
+                    string.IsNullOrWhiteSpace(_newComponentDesignation) ? _newComponentCode.Trim() : _newComponentDesignation.Trim(),
+                    SimulationArticleTypes.Purchased,
+                    _newComponentProcurement,
+                    _newComponentLeadTime,
+                    Unit: _newBomUnit));
+                componentId = created.Id;
+            }
+
+            await SimulationService.UpsertSimBomLineAsync(new UpsertSimBomLineRequest(
+                _selectedSimulationId,
+                _templateArticleId,
+                null,
+                componentId,
+                _newBomQty,
+                ApplySizeCoefficient: _newBomSizeCoef,
+                ApplyColorSubstitution: _newBomColorSub,
+                Unit: _newBomUnit,
+                NomenclatureType: SimulationNomenclatureTypes.Base,
+                Alternative: 0));
+
+            await SimulationService.EnsureAlternativeNomenclaturesAsync(_selectedSimulationId, _templateArticleId);
+            await ReloadNomenclatureFromDbAsync();
+            _newComponentArticleId = 0;
+            _newComponentCode = string.Empty;
+            _newComponentDesignation = string.Empty;
+            _newBomQty = 1;
+            _newBomUnit = SimulationBomUnits.Un;
+            _newBomSizeCoef = false;
+            _newBomColorSub = false;
+            _message = "Ligne de nomenclature enregistree en base.";
+        });
+    }
+
+    private async Task OnSimulationChangedAsync()
+    {
+        _cbnResult = null;
+        SyncSimulationUri();
+        await LoadSimulationDataAsync();
+    }
+
+    private async Task LoadSimulationDataAsync()
+    {
+        if (_selectedSimulationId <= 0)
+        {
+            return;
+        }
+
+        var previousTemplateId = _templateArticleId;
+        var previousNomId = _nomBaseArticleId;
+        _articles = (await SimulationService.GetArticlesAsync(_selectedSimulationId)).ToList();
+        _bomLines = (await SimulationService.GetBomLinesAsync(_selectedSimulationId)).ToList();
+        _parameters = (await SimulationService.GetParametersAsync(_selectedSimulationId)).ToList();
+        _paramEdits.Clear();
+        foreach (var p in EditableCbnParameters)
+        {
+            _paramEdits[p.ArticleId] = new ParamEdit
+            {
+                OnHandStock = p.OnHandStock,
+                SafetyStock = p.SafetyStock,
+                ReservedQuantity = p.ReservedQuantity,
+                ScheduledReceiptProduction = p.ScheduledReceiptProduction,
+                ScheduledReceiptPurchase = p.ScheduledReceiptPurchase,
+                LeadTimeDays = p.LeadTimeDays,
+                LotRule = p.LotRule,
+                MinLot = p.MinLot,
+                MultipleLot = p.MultipleLot
+            };
+        }
+
+        var template = _articles.FirstOrDefault(a => a.Id == previousTemplateId && a.IsTemplate)
+                        ?? _articles.FirstOrDefault(a => a.IsTemplate);
+        _templateArticleId = template?.Id ?? 0;
+        if (previousNomId > 0 && _articles.Any(a => a.Id == previousNomId))
+        {
+            _nomBaseArticleId = previousNomId;
+        }
+        else if (_nomBaseArticleId <= 0 && _templateArticleId > 0)
+        {
+            _nomBaseArticleId = _templateArticleId;
+        }
+
+        SyncBomLineEdits();
+
+        var generated = _articles.FirstOrDefault(a => a.Code == "PANTALON_NOIR_L")
+                        ?? _articles.FirstOrDefault(a => a.IsGenerated);
+        if (generated is not null)
+        {
+            _cbnArticleId = generated.Id;
+        }
+
+        await LoadDuplicationOptionsAsync();
+        await LoadCbnHistoryAsync();
+    }
+
+    private async Task LoadCbnHistoryAsync()
+    {
+        if (_selectedSimulationId <= 0)
+        {
+            _cbnHistory = [];
+            _selectedRunId = 0;
+            return;
+        }
+
+        _cbnHistory = (await CbnApplication.ListSimulationRunsAsync(_selectedSimulationId)).ToList();
+    }
+
+    private async Task LoadCbnRunAsync(int runId)
+    {
+        await RunAsync(async () =>
+        {
+            var result = await CbnApplication.GetSimulationRunAsync(runId);
+            if (result is null)
+            {
+                throw new InvalidOperationException("Calcul CBN introuvable.");
+            }
+
+            _cbnResult = result;
+            _selectedRunId = runId;
+            _resultTab = "trace";
+            _message = $"Calcul CBN #{runId} charge depuis l'historique.";
+        });
+    }
+
+    private async Task LoadDuplicationOptionsAsync()
+    {
+        if (_selectedSimulationId <= 0)
+        {
+            _sizes = [];
+            _colors = [];
+            return;
+        }
+
+        await SimulationService.EnsureDefaultDuplicationOptionsAsync(_selectedSimulationId);
+        var options = await SimulationService.GetDuplicationOptionsAsync(_selectedSimulationId);
+        _sizes = options.Sizes
+            .Select(s => new SizeEdit(s.Size, s.Coefficient, s.IsSelected))
+            .ToList();
+        _colors = options.Colors
+            .Select(c => new ColorEdit(c.Color, c.Coefficient, c.IsSelected))
+            .ToList();
+    }
+
+    private async Task SaveDuplicationOptionsAsync()
+    {
+        if (_selectedSimulationId <= 0 || _busy)
+        {
+            return;
+        }
+
+        try
+        {
+            await SimulationService.SaveDuplicationOptionsAsync(new SaveDuplicationOptionsRequest(
+                _selectedSimulationId,
+                _sizes.Select((s, index) => new DuplicationSizeOptionDto(
+                    s.Size.Trim(),
+                    s.Coefficient,
+                    s.Selected,
+                    index)).ToList(),
+                _colors.Select((c, index) => new DuplicationColorOptionDto(
+                    c.Color.Trim(),
+                    c.Coefficient,
+                    c.Selected,
+                    index)).ToList()));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task GenerateVariantsAsync()
+    {
+        await RunAsync(async () =>
+        {
+            if (_templateArticleId <= 0)
+            {
+                throw new InvalidOperationException("Choisissez un article template (seed ou creation d'abord).");
+            }
+
+            var selectedSizes = _sizes
+                .Where(s => s.Selected && !string.IsNullOrWhiteSpace(s.Size))
+                .Select(s => new SizeCoefficientInput(s.Size.Trim(), s.Coefficient))
+                .ToList();
+            var selectedColors = _colors
+                .Where(c => c.Selected && !string.IsNullOrWhiteSpace(c.Color))
+                .Select(c => new ColorCoefficientInput(c.Color.Trim(), c.Coefficient))
+                .ToList();
+
+            if (selectedSizes.Count == 0)
+            {
+                throw new InvalidOperationException("Cochez au moins une taille a dupliquer.");
+            }
+
+            if (selectedColors.Count == 0)
+            {
+                throw new InvalidOperationException("Cochez au moins une couleur a dupliquer.");
+            }
+
+            if (selectedSizes.Any(s => s.Coefficient <= 0) || selectedColors.Any(c => c.Coefficient <= 0))
+            {
+                throw new InvalidOperationException("Les coefficients doivent etre strictement positifs.");
+            }
+
+            var result = await DuplicationService.GenerateVariantsAsync(new GenerateVariantsRequest(
+                _selectedSimulationId,
+                _templateArticleId,
+                selectedSizes,
+                selectedColors));
+
+            await LoadSimulationDataAsync();
+            _message = $"{result.GeneratedArticles.Count} variante(s) generee(s) ({selectedSizes.Count} taille(s) × {selectedColors.Count} couleur(s)).";
+        });
+    }
+
+    private async Task AddSize()
+    {
+        var name = _newSizeName.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _error = "Saisissez un nom de taille.";
+            return;
+        }
+
+        if (_sizes.Any(s => string.Equals(s.Size, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _error = $"La taille '{name}' existe deja.";
+            return;
+        }
+
+        if (_newSizeCoefficient <= 0)
+        {
+            _error = "Le coefficient taille doit etre > 0.";
+            return;
+        }
+
+        _error = null;
+        _sizes.Add(new SizeEdit(name, _newSizeCoefficient, selected: true));
+        _newSizeName = string.Empty;
+        _newSizeCoefficient = 1.0;
+        await SaveDuplicationOptionsAsync();
+    }
+
+    private async Task RemoveSize(SizeEdit size)
+    {
+        _sizes.Remove(size);
+        await SaveDuplicationOptionsAsync();
+    }
+
+    private async Task AddColor()
+    {
+        var name = _newColorName.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _error = "Saisissez un nom de couleur.";
+            return;
+        }
+
+        if (_colors.Any(c => string.Equals(c.Color, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _error = $"La couleur '{name}' existe deja.";
+            return;
+        }
+
+        if (_newColorCoefficient <= 0)
+        {
+            _error = "Le coefficient couleur doit etre > 0.";
+            return;
+        }
+
+        _error = null;
+        _colors.Add(new ColorEdit(name, _newColorCoefficient, selected: true));
+        _newColorName = string.Empty;
+        _newColorCoefficient = 1.0;
+        await SaveDuplicationOptionsAsync();
+    }
+
+    private async Task RemoveColor(ColorEdit color)
+    {
+        _colors.Remove(color);
+        await SaveDuplicationOptionsAsync();
+    }
+
+    private async Task ToggleAllSizes(ChangeEventArgs args)
+    {
+        var selected = args.Value is bool b && b
+            || string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        foreach (var size in _sizes)
+        {
+            size.Selected = selected;
+        }
+
+        await SaveDuplicationOptionsAsync();
+    }
+
+    private async Task ToggleAllColors(ChangeEventArgs args)
+    {
+        var selected = args.Value is bool b && b
+            || string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        foreach (var color in _colors)
+        {
+            color.Selected = selected;
+        }
+
+        await SaveDuplicationOptionsAsync();
+    }
+
+    private void OpenCbnForArticle(SimulationArticleDto article)
+    {
+        _cbnArticleId = article.Id;
+        _activeTab = "cbn";
+        _message = $"CBN preselectionne : {article.Code}";
+    }
+
+    private async Task SaveParamAsync(int articleId)
+    {
+        await RunAsync(async () =>
+        {
+            var edit = _paramEdits[articleId];
+            await SimulationService.UpdateParameterAsync(new UpdateSimCbnParameterRequest(
+                _selectedSimulationId,
+                articleId,
+                edit.OnHandStock,
+                edit.SafetyStock,
+                edit.ReservedQuantity,
+                edit.ScheduledReceiptProduction,
+                edit.ScheduledReceiptPurchase,
+                edit.LeadTimeDays,
+                edit.LotRule,
+                edit.MinLot,
+                edit.MultipleLot));
+            _parameters = (await SimulationService.GetParametersAsync(_selectedSimulationId)).ToList();
+            _message = "Parametres CBN enregistres.";
+        });
+    }
+
+    private async Task RunCbnAsync()
+    {
+        await RunAsync(async () =>
+        {
+            if (_cbnArticleId <= 0)
+            {
+                throw new InvalidOperationException("Choisissez un article genere.");
+            }
+
+            var so = await SimulationService.UpsertSalesOrderAsync(new UpsertSalesOrderRequest(
+                _selectedSimulationId,
+                _customerName,
+                _orderNumber,
+                _cbnArticleId,
+                _orderQty,
+                DateOnly.FromDateTime(_requestedDate)));
+
+            var run = await CbnApplication.RunSimulationAsync(new CbnRunRequestDto(
+                _selectedSimulationId,
+                so.Id,
+                _cbnArticleId,
+                _orderQty,
+                DateOnly.FromDateTime(_requestedDate)));
+
+            _cbnResult = run.Result;
+
+            _selectedRunId = _cbnResult.RunId;
+            _resultTab = "trace";
+            await LoadCbnHistoryAsync();
+            _message = $"CBN termine (#{_cbnResult.RunId}) — {_cbnResult.PlannedOrders.Count} ordres, {_cbnResult.Alerts.Count} alertes.";
+        });
+    }
+
+    private RenderFragment RenderPegging(PeggingNodeDto node, int depth) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "style", $"padding-left:{depth * 1.25}rem;margin:0.2rem 0");
+        builder.AddContent(2, $"{(depth == 0 ? "●" : "└")} {node.ArticleCode} — qty {node.Quantity:F3} — {node.SourceType} — {node.NeedDate}");
+        builder.OpenElement(3, "div");
+        builder.AddAttribute(4, "class", "subtle");
+        builder.AddContent(5, node.Path);
+        builder.CloseElement();
+        builder.CloseElement();
+        foreach (var child in node.Children)
+        {
+            builder.AddContent(10 + depth, RenderPegging(child, depth + 1));
+        }
+    };
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        _error = null;
+        _message = null;
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class BomLineEdit
+    {
+        public double QuantityPer { get; set; }
+        public string Unit { get; set; } = SimulationBomUnits.Un;
+        public int Alternative { get; set; }
+        public bool ApplySizeCoefficient { get; set; }
+        public bool ApplyColorSubstitution { get; set; }
+    }
+
+    private sealed class SizeEdit(string size, double coefficient, bool selected = true)
+    {
+        public string Size { get; set; } = size;
+        public double Coefficient { get; set; } = coefficient;
+        public bool Selected { get; set; } = selected;
+    }
+
+    private sealed class ColorEdit(string color, double coefficient, bool selected = true)
+    {
+        public string Color { get; set; } = color;
+        public double Coefficient { get; set; } = coefficient;
+        public bool Selected { get; set; } = selected;
+    }
+
+    private sealed class ParamEdit
+    {
+        public double OnHandStock { get; set; }
+        public double SafetyStock { get; set; }
+        public double ReservedQuantity { get; set; }
+        public double ScheduledReceiptProduction { get; set; }
+        public double ScheduledReceiptPurchase { get; set; }
+        public int LeadTimeDays { get; set; }
+        public string LotRule { get; set; } = SimulationLotRules.LotForLot;
+        public double MinLot { get; set; }
+        public double MultipleLot { get; set; } = 1;
+    }
+}

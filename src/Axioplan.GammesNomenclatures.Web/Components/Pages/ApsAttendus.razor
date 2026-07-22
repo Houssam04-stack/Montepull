@@ -1,0 +1,125 @@
+@page "/aps/attendus"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Expectations
+@inject ApsExpectationService ExpectationService
+
+<PageTitle>APS Attendus</PageTitle>
+
+<h2>APS — Journal des attendus</h2>
+<p class="hint">Lecture + emission demo. Attendus immuables (M8). Pas d'abonnes temps reel.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+
+<section class="card">
+    <div class="form-grid">
+        <div>
+            <label>Type</label>
+            <input class="form-control" @bind="_type" />
+        </div>
+        <div>
+            <label>Grain</label>
+            <input class="form-control" @bind="_grain" />
+        </div>
+        <div style="align-self:end">
+            <button class="btn-primary" @onclick="LoadAsync" disabled="@_busy">Filtrer</button>
+            <button class="btn-secondary" @onclick="EmitDemoAsync" disabled="@_busy">Emitter demo</button>
+        </div>
+    </div>
+
+    <table style="margin-top:1rem">
+        <thead>
+            <tr>
+                <th>Expected id</th>
+                <th>Type</th>
+                <th>By</th>
+                <th>Grain</th>
+                <th>Fenetre</th>
+                <th>HRE</th>
+                <th>Aggregate</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var e in _items)
+        {
+            <tr>
+                <td>@e.ExpectedId</td>
+                <td>@e.ExpectedType</td>
+                <td>@e.EmittedBy</td>
+                <td>@e.Grain</td>
+                <td>@e.EarliestAtUtc.ToString("d") → @e.LatestAtUtc.ToString("d")</td>
+                <td>@(e.Hre?.ToString("F2") ?? "—")</td>
+                <td>@e.AggregateId</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<ApsExpectation> _items = [];
+    private string? _type;
+    private string? _grain;
+    private string? _error;
+    private string? _message;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _items = (await ExpectationService.QueryAsync(new ApsExpectationQuery(ExpectedType: _type, Grain: _grain))).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task EmitDemoAsync()
+    {
+        _busy = true;
+        _error = null;
+        _message = null;
+        try
+        {
+            var id = $"DateLimiteAchatFil:DEMO:{DateTime.UtcNow:yyyyMMddHHmmss}";
+            await ExpectationService.EmitAsync(new EmitApsExpectationCommand(
+                id,
+                ApsExpectationTypes.YarnPurchaseDeadline,
+                ApsExpectationEmitters.M2,
+                ApsExpectationGrains.Month,
+                DateTime.UtcNow.Date,
+                DateTime.UtcNow.Date.AddMonths(1),
+                "fil:demo",
+                """{"article":"FIL-DEMO","note":"TO_CONFIRM"}""",
+                Hre: 12.5));
+            _message = $"Attendu emis : {id}";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

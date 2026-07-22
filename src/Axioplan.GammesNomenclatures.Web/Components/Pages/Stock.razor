@@ -1,0 +1,530 @@
+@page "/stock"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Models
+@inject StockService StockService
+
+<PageTitle>Stock</PageTitle>
+
+<PageHeader Title="Stock"
+            Description="Détail par lot, synthèse par article et nomenclatures — filtres par catégorie, famille, type et BOM." />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <p>Chargement du stock...</p>
+}
+else
+{
+    <nav class="section-tabs" aria-label="Vues stock">
+        <button type="button" class="section-tab @(_view == "detail" ? "active" : "")" @onclick='() => SelectView("detail")'>
+            Détail lots (@FilteredLotLines.Count / @_lotLines.Count)
+        </button>
+        <button type="button" class="section-tab @(_view == "summary" ? "active" : "")" @onclick='() => SelectView("summary")'>
+            Synthèse (@FilteredBalances.Count / @_balances.Count)
+        </button>
+        <button type="button" class="section-tab @(_view == "nomenclatures" ? "active" : "")" @onclick='() => SelectView("nomenclatures")'>
+            Nomenclatures (@FilteredNomenclatures.Count / @_nomenclatures.Count)
+        </button>
+    </nav>
+
+    <section class="card">
+        <div class="form-grid">
+            <div>
+                <label for="filterCategory">Catégorie (genre)</label>
+                <select id="filterCategory" class="form-control" @bind="_filterCategoryCode">
+                    <option value="">— Toutes —</option>
+                    @foreach (var cat in _filterOptions.Categories)
+                    {
+                        <option value="@cat.Code">@cat.Label</option>
+                    }
+                </select>
+            </div>
+            <div>
+                <label for="filterFamily">Famille</label>
+                <select id="filterFamily" class="form-control" @bind="_filterFamilyCode">
+                    <option value="">— Toutes —</option>
+                    @foreach (var fam in VisibleFamilies)
+                    {
+                        <option value="@fam.Code">@fam.Label</option>
+                    }
+                </select>
+            </div>
+            <div>
+                <label for="filterType">Type article</label>
+                <select id="filterType" class="form-control" @bind="_filterArticleType">
+                    <option value="">— Tous —</option>
+                    @foreach (var type in _filterOptions.ArticleTypes)
+                    {
+                        <option value="@type">@DisplayLabels.ArticleType(type)</option>
+                    }
+                </select>
+            </div>
+            <div>
+                <label for="filterBom">Nomenclature (BOM)</label>
+                <select id="filterBom" class="form-control" @bind="_filterBomCode">
+                    <option value="">— Toutes —</option>
+                    @foreach (var bom in _filterOptions.BomBases)
+                    {
+                        <option value="@bom.Code">@DisplayLabels.BomBase(bom.Label)</option>
+                    }
+                </select>
+            </div>
+            <div class="info-span-2">
+                <label for="stockSearch">Rechercher</label>
+                <input id="stockSearch"
+                       class="form-control"
+                       placeholder="Code, libellé, lot, emplacement, composant, BOM..."
+                       @bind="_searchText"
+                       @bind:event="oninput" />
+            </div>
+        </div>
+
+        @if (HasActiveFilters)
+        {
+            <div class="inline-form mt-3">
+                <span class="hint">Filtres actifs — cliquez une ligne nomenclature ou article pour affiner.</span>
+                <button type="button" class="btn-secondary btn-sm" @onclick="ClearFilters">Réinitialiser</button>
+            </div>
+        }
+
+        <div class="summary-stats mt-3">
+            <div class="stat">
+                <span class="stat-value">@DisplayedCount</span>
+                <span class="stat-label">ligne(s) affichée(s)</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value">@_lotLines.Count</span>
+                <span class="stat-label">lignes lot (Excel)</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value">@_balances.Count</span>
+                <span class="stat-label">articles agrégés</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value">@_nomenclatures.Count</span>
+                <span class="stat-label">lignes nomenclature</span>
+            </div>
+        </div>
+
+        @if (_view == "detail")
+        {
+            @if (FilteredLotLines.Count == 0)
+            {
+                <p class="hint mt-3">Aucune ligne ne correspond aux filtres.</p>
+            }
+            else
+            {
+                <table class="mt-3 stock-table">
+                    <thead>
+                        <tr>
+                            <th>Article</th>
+                            <th>Libellé</th>
+                            <th>Catégorie</th>
+                            <th>Famille</th>
+                            <th>Type</th>
+                            <th>Emplacement</th>
+                            <th>Entrepôt</th>
+                            <th>Lot</th>
+                            <th class="num">Dispo</th>
+                            <th>Statut</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <Virtualize Items="@FilteredLotLines" Context="row" ItemSize="42">
+                            <tr @key="row.Id" class="clickable-row" @onclick="() => FilterByArticle(row.ArticleCode, row.ArticleId)">
+                                <td>@row.ArticleCode</td>
+                                <td>@row.ArticleLabel</td>
+                                <td>@row.CategoryLabel</td>
+                                <td>@row.FamilyLabel</td>
+                                <td>@DisplayLabels.ArticleType(row.ArticleType)</td>
+                                <td>@(row.LocationCode ?? "—")</td>
+                                <td>@(row.Warehouse ?? "—")</td>
+                                <td>@(row.LotCode ?? "—")</td>
+                                <td class="num">@row.QuantityAvailable.ToString("F3")</td>
+                                <td>@(row.Status ?? "—")</td>
+                            </tr>
+                        </Virtualize>
+                    </tbody>
+                </table>
+            }
+        }
+        else if (_view == "summary")
+        {
+            @if (FilteredBalances.Count == 0)
+            {
+                <p class="hint mt-3">Aucun article ne correspond aux filtres.</p>
+            }
+            else
+            {
+                <p class="hint mt-3">1 ligne par article — cliquez pour voir les nomenclatures associées.</p>
+                <table class="mt-3 stock-table">
+                    <thead>
+                        <tr>
+                            <th>Code article</th>
+                            <th>Libellé</th>
+                            <th>Catégorie</th>
+                            <th>Famille</th>
+                            <th>Type</th>
+                            <th class="num">Quantité disponible</th>
+                            <th>Unité</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <Virtualize Items="@FilteredBalances" Context="row" ItemSize="42">
+                            <tr @key="row.Id" class="clickable-row" @onclick="() => FilterByArticle(row.ArticleCode, row.ArticleId)">
+                                <td>@row.ArticleCode</td>
+                                <td>@row.ArticleLabel</td>
+                                <td>@row.CategoryLabel</td>
+                                <td>@row.FamilyLabel</td>
+                                <td>@DisplayLabels.ArticleType(row.ArticleType)</td>
+                                <td class="num">@row.QuantityAvailable.ToString("F3")</td>
+                                <td>@DisplayLabels.Unit(row.Unit)</td>
+                            </tr>
+                        </Virtualize>
+                    </tbody>
+                </table>
+            }
+        }
+        else
+        {
+            @if (FilteredNomenclatures.Count == 0)
+            {
+                <p class="hint mt-3">Aucune ligne de nomenclature ne correspond aux filtres.</p>
+            }
+            else
+            {
+                <p class="hint mt-3">Cliquez une ligne pour filtrer le stock sur la nomenclature ou le composant.</p>
+                <table class="mt-3 stock-table">
+                    <thead>
+                        <tr>
+                            <th>Nomenclature</th>
+                            <th>Ver.</th>
+                            <th>Article parent</th>
+                            <th class="num">Ligne</th>
+                            <th>Composant</th>
+                            <th>Libellé</th>
+                            <th>Catégorie</th>
+                            <th>Famille</th>
+                            <th>Type</th>
+                            <th class="num">Qté/par</th>
+                            <th>Unité</th>
+                            <th class="num">Perte</th>
+                            <th>Comportement</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <Virtualize Items="@FilteredNomenclatures" Context="row" ItemSize="42">
+                            <tr @key="row.Id" class="clickable-row" @onclick="() => FilterByNomenclature(row)">
+                                <td>@DisplayLabels.BomBase(row.BomCode)</td>
+                                <td>@row.BomVersion</td>
+                                <td>@(row.ParentArticleCode ?? "—")</td>
+                                <td class="num">@row.LineNo</td>
+                                <td>@row.ComponentArticleCode</td>
+                                <td>@row.ComponentArticleLabel</td>
+                                <td>@row.CategoryLabel</td>
+                                <td>@row.FamilyLabel</td>
+                                <td>@DisplayLabels.ArticleType(row.ComponentArticleType)</td>
+                                <td class="num">@row.QuantityBase.ToString("F4")</td>
+                                <td>@DisplayLabels.Unit(row.Unit)</td>
+                                <td class="num">@row.LossRate.ToString("F2")</td>
+                                <td>@row.Behavior</td>
+                            </tr>
+                        </Virtualize>
+                    </tbody>
+                </table>
+            }
+        }
+    </section>
+}
+
+@code {
+    private string _view = "detail";
+    private List<StockLotLineRow> _lotLines = [];
+    private List<StockBalanceRow> _balances = [];
+    private List<StockNomenclatureLineRow> _nomenclatures = [];
+    private StockFilterOptionsDto _filterOptions = new([], [], [], []);
+    private string _searchText = string.Empty;
+    private string _filterCategoryCode = string.Empty;
+    private string _filterFamilyCode = string.Empty;
+    private string _filterArticleType = string.Empty;
+    private string _filterBomCode = string.Empty;
+    private string _filterArticleCode = string.Empty;
+    private int _filterArticleId;
+    private bool _isLoading = true;
+    private string? _loadError;
+
+    private IEnumerable<StockFilterOption> VisibleFamilies =>
+        string.IsNullOrWhiteSpace(_filterCategoryCode)
+            ? _filterOptions.Families
+            : _filterOptions.Families.Where(f =>
+                _balances.Any(b => b.FamilyLabel == f.Label && CategoryCodeForBalance(b) == _filterCategoryCode)
+                || _nomenclatures.Any(n => n.FamilyLabel == f.Label && CategoryCodeForNomenclature(n) == _filterCategoryCode));
+
+    private HashSet<int> BomFilteredArticleIds => BuildBomFilteredArticleIds();
+    private List<StockLotLineRow> FilteredLotLines => ApplyLotFilters();
+    private List<StockBalanceRow> FilteredBalances => ApplyBalanceFilters();
+    private List<StockNomenclatureLineRow> FilteredNomenclatures => ApplyNomenclatureFilters();
+    private int DisplayedCount => _view switch
+    {
+        "summary" => FilteredBalances.Count,
+        "nomenclatures" => FilteredNomenclatures.Count,
+        _ => FilteredLotLines.Count
+    };
+
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_filterCategoryCode)
+        || !string.IsNullOrWhiteSpace(_filterFamilyCode)
+        || !string.IsNullOrWhiteSpace(_filterArticleType)
+        || !string.IsNullOrWhiteSpace(_filterBomCode)
+        || !string.IsNullOrWhiteSpace(_filterArticleCode)
+        || !string.IsNullOrWhiteSpace(_searchText);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await StockService.EnsureSchemaAsync();
+            _lotLines = (await StockService.GetStockLotLinesAsync()).ToList();
+            _balances = (await StockService.GetStockBalancesAsync()).ToList();
+            _nomenclatures = (await StockService.GetNomenclatureLinesAsync()).ToList();
+            _filterOptions = await StockService.GetFilterOptionsAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void SelectView(string view) => _view = view;
+
+    private void ClearFilters()
+    {
+        _filterCategoryCode = string.Empty;
+        _filterFamilyCode = string.Empty;
+        _filterArticleType = string.Empty;
+        _filterBomCode = string.Empty;
+        _filterArticleCode = string.Empty;
+        _filterArticleId = 0;
+        _searchText = string.Empty;
+    }
+
+    private void FilterByArticle(string articleCode, int articleId)
+    {
+        _filterArticleCode = articleCode;
+        _filterArticleId = articleId;
+        _searchText = articleCode;
+        _view = "nomenclatures";
+    }
+
+    private void FilterByNomenclature(StockNomenclatureLineRow row)
+    {
+        _filterBomCode = row.BomCode;
+        _filterArticleCode = row.ComponentArticleCode;
+        _filterArticleId = row.ComponentArticleId;
+        _searchText = row.ComponentArticleCode;
+        _view = "summary";
+    }
+
+    private List<StockLotLineRow> ApplyLotFilters()
+    {
+        var rows = _lotLines.AsEnumerable();
+        rows = ApplyCommonArticleFilters(rows, r => r.ArticleId, r => r.ArticleType, r => r.CategoryLabel, r => r.FamilyLabel, r => r.ArticleCode, r => r.ArticleLabel);
+        return rows.Where(MatchesLotSearch).ToList();
+    }
+
+    private List<StockBalanceRow> ApplyBalanceFilters()
+    {
+        var rows = _balances.AsEnumerable();
+        rows = ApplyCommonArticleFilters(rows, r => r.ArticleId, r => r.ArticleType, r => r.CategoryLabel, r => r.FamilyLabel, r => r.ArticleCode, r => r.ArticleLabel);
+        return rows.Where(MatchesBalanceSearch).ToList();
+    }
+
+    private List<StockNomenclatureLineRow> ApplyNomenclatureFilters()
+    {
+        var rows = _nomenclatures.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_filterBomCode))
+        {
+            rows = rows.Where(r => string.Equals(r.BomCode, _filterBomCode, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterCategoryCode))
+        {
+            rows = rows.Where(r => CategoryCodeForNomenclature(r) == _filterCategoryCode);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterFamilyCode))
+        {
+            var familyLabel = _filterOptions.Families.FirstOrDefault(f => f.Code == _filterFamilyCode)?.Label;
+            if (!string.IsNullOrWhiteSpace(familyLabel))
+            {
+                rows = rows.Where(r => string.Equals(r.FamilyLabel, familyLabel, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterArticleType))
+        {
+            rows = rows.Where(r => string.Equals(r.ComponentArticleType, _filterArticleType, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (_filterArticleId > 0)
+        {
+            rows = rows.Where(r =>
+                r.ComponentArticleId == _filterArticleId
+                || string.Equals(r.ComponentArticleCode, _filterArticleCode, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(r.ParentArticleCode, _filterArticleCode, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (string.IsNullOrWhiteSpace(_searchText))
+        {
+            return rows.ToList();
+        }
+
+        var terms = _searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return rows.Where(row => terms.All(term => MatchesNomenclature(row, term))).ToList();
+    }
+
+    private IEnumerable<T> ApplyCommonArticleFilters<T>(
+        IEnumerable<T> rows,
+        Func<T, int> articleId,
+        Func<T, string> articleType,
+        Func<T, string> categoryLabel,
+        Func<T, string> familyLabel,
+        Func<T, string> articleCode,
+        Func<T, string> articleLabel)
+    {
+        if (!string.IsNullOrWhiteSpace(_filterCategoryCode))
+        {
+            var categoryLabelMatch = _filterOptions.Categories.FirstOrDefault(c => c.Code == _filterCategoryCode)?.Label;
+            if (!string.IsNullOrWhiteSpace(categoryLabelMatch))
+            {
+                rows = rows.Where(r => string.Equals(categoryLabel(r), categoryLabelMatch, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterFamilyCode))
+        {
+            var familyLabelMatch = _filterOptions.Families.FirstOrDefault(f => f.Code == _filterFamilyCode)?.Label;
+            if (!string.IsNullOrWhiteSpace(familyLabelMatch))
+            {
+                rows = rows.Where(r => string.Equals(familyLabel(r), familyLabelMatch, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterArticleType))
+        {
+            rows = rows.Where(r => string.Equals(articleType(r), _filterArticleType, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterBomCode))
+        {
+            var allowed = BomFilteredArticleIds;
+            rows = rows.Where(r => allowed.Contains(articleId(r)));
+        }
+
+        if (_filterArticleId > 0)
+        {
+            rows = rows.Where(r => articleId(r) == _filterArticleId);
+        }
+
+        return rows;
+    }
+
+    private HashSet<int> BuildBomFilteredArticleIds()
+    {
+        if (string.IsNullOrWhiteSpace(_filterBomCode))
+        {
+            return [];
+        }
+
+        var ids = new HashSet<int>();
+        foreach (var line in _nomenclatures.Where(n => string.Equals(n.BomCode, _filterBomCode, StringComparison.OrdinalIgnoreCase)))
+        {
+            ids.Add(line.ComponentArticleId);
+            var parent = _balances.FirstOrDefault(b => string.Equals(b.ArticleCode, line.ParentArticleCode, StringComparison.OrdinalIgnoreCase));
+            if (parent is not null)
+            {
+                ids.Add(parent.ArticleId);
+            }
+        }
+
+        return ids;
+    }
+
+    private string CategoryCodeForBalance(StockBalanceRow row)
+        => _filterOptions.Categories.FirstOrDefault(c => c.Label == row.CategoryLabel)?.Code ?? row.CategoryLabel;
+
+    private string CategoryCodeForNomenclature(StockNomenclatureLineRow row)
+        => _filterOptions.Categories.FirstOrDefault(c => c.Label == row.CategoryLabel)?.Code ?? row.CategoryLabel;
+
+    private bool MatchesLotSearch(StockLotLineRow row)
+    {
+        if (string.IsNullOrWhiteSpace(_searchText))
+        {
+            return true;
+        }
+
+        var terms = _searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return terms.All(term => MatchesLotLine(row, term));
+    }
+
+    private bool MatchesBalanceSearch(StockBalanceRow row)
+    {
+        if (string.IsNullOrWhiteSpace(_searchText))
+        {
+            return true;
+        }
+
+        var terms = _searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return terms.All(term => MatchesBalance(row, term));
+    }
+
+    private static bool MatchesLotLine(StockLotLineRow row, string term)
+    {
+        var comparison = StringComparison.OrdinalIgnoreCase;
+        return row.ArticleCode.Contains(term, comparison)
+            || row.ArticleLabel.Contains(term, comparison)
+            || row.CategoryLabel.Contains(term, comparison)
+            || row.FamilyLabel.Contains(term, comparison)
+            || DisplayLabels.ArticleType(row.ArticleType).Contains(term, comparison)
+            || (row.LocationCode?.Contains(term, comparison) ?? false)
+            || (row.Warehouse?.Contains(term, comparison) ?? false)
+            || (row.LotCode?.Contains(term, comparison) ?? false)
+            || (row.SupplierLot?.Contains(term, comparison) ?? false)
+            || (row.Status?.Contains(term, comparison) ?? false)
+            || row.QuantityAvailable.ToString("F3").Contains(term, comparison);
+    }
+
+    private static bool MatchesBalance(StockBalanceRow row, string term)
+    {
+        var comparison = StringComparison.OrdinalIgnoreCase;
+        return row.ArticleCode.Contains(term, comparison)
+            || row.ArticleLabel.Contains(term, comparison)
+            || row.CategoryLabel.Contains(term, comparison)
+            || row.FamilyLabel.Contains(term, comparison)
+            || row.ArticleType.Contains(term, comparison)
+            || DisplayLabels.ArticleType(row.ArticleType).Contains(term, comparison)
+            || row.QuantityAvailable.ToString("F3").Contains(term, comparison);
+    }
+
+    private static bool MatchesNomenclature(StockNomenclatureLineRow row, string term)
+    {
+        var comparison = StringComparison.OrdinalIgnoreCase;
+        return row.BomCode.Contains(term, comparison)
+            || (row.ParentArticleCode?.Contains(term, comparison) ?? false)
+            || (row.ParentArticleLabel?.Contains(term, comparison) ?? false)
+            || row.ComponentArticleCode.Contains(term, comparison)
+            || row.ComponentArticleLabel.Contains(term, comparison)
+            || row.CategoryLabel.Contains(term, comparison)
+            || row.FamilyLabel.Contains(term, comparison)
+            || DisplayLabels.ArticleType(row.ComponentArticleType).Contains(term, comparison)
+            || row.Behavior.Contains(term, comparison);
+    }
+}
