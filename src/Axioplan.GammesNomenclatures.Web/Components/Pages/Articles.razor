@@ -2,6 +2,7 @@
 @page "/articles/{Section}"
 @rendermode InteractiveServer
 @inject ArticleService ArticleService
+@inject NavigationManager Nav
 
 <PageTitle>Configurateur Articles</PageTitle>
 
@@ -43,7 +44,7 @@ else
                         <label for="articleSearch">Rechercher</label>
                         <input id="articleSearch"
                                class="form-control"
-                               placeholder="Code, libellé, famille, type, client..."
+                               placeholder="Article (PE…, SF…, AC…), libellé, famille, type, client..."
                                @bind="_searchText"
                                @bind:event="oninput" />
                     </div>
@@ -53,7 +54,7 @@ else
                 {
                     <section class="card trace-panel" id="article-trace">
                         <div class="row-actions" style="justify-content:space-between;width:100%">
-                            <h3 style="margin:0">Traçabilité — @_selectedArticle.Code</h3>
+                            <h3 style="margin:0">Traçabilité — Article @_selectedArticle.Code</h3>
                             <button type="button" class="btn-secondary" @onclick="ClearSelection">Fermer</button>
                         </div>
                         <dl class="info-list mt-3">
@@ -122,10 +123,11 @@ else
                     </section>
                 }
 
+                <p class="hint mt-3">Colonne <strong>Article</strong> = code unique (comme Stock) : PE… produits finis, SF…, AC… / EL… composants, etc.</p>
                 <table class="mt-3">
                     <thead>
                         <tr>
-                            <th>Code</th>
+                            <th>Article</th>
                             <th>Libellé</th>
                             <th>Famille</th>
                             <th>Type</th>
@@ -139,7 +141,7 @@ else
                         @foreach (var article in DisplayedArticles)
                         {
                             <tr class="@(article.Id == _selectedArticleId ? "selected" : null)" @key="article.Id">
-                                <td>@article.Code</td>
+                                <td><strong>@article.Code</strong></td>
                                 <td>@article.Label</td>
                                 <td>@article.FamilyLabel</td>
                                 <td>@DisplayLabels.ArticleType(article.ArticleType)</td>
@@ -151,7 +153,7 @@ else
                                         <button type="button" class="btn-secondary" @onclick="() => SelectArticle(article)">Traçabilité</button>
                                         @if (_dupEditingId == article.Id)
                                         {
-                                            <input class="form-control" @bind="_dupNewCode" placeholder="Nouveau code" />
+                                            <input class="form-control" @bind="_dupNewCode" placeholder="Nouveau code article (ex. PE260999)" />
                                             <button type="button" class="btn-primary" @onclick="() => DuplicateFromRowAsync(article)" disabled="@_isBusy">OK</button>
                                             <button type="button" class="btn-secondary" @onclick="CancelDuplicate">Annuler</button>
                                         }
@@ -178,7 +180,7 @@ else
                 <div class="form-grid">
                     <div>
                         <label>Code article *</label>
-                        <input class="form-control" @bind="_manualCode" />
+                        <input class="form-control" @bind="_manualCode" placeholder="ex. PE260999, AC260001..." />
                     </div>
                     <div>
                         <label>Libellé *</label>
@@ -502,35 +504,9 @@ else
 
         case "bom":
             <section class="card">
-                <h3>Lien BOM / Gammes</h3>
-                <p class="hint">Articles configurés ou dupliqués — lien avec nomenclatures et gammes du module Gammes &amp; Nomenclatures.</p>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Article</th>
-                            <th>Famille produit</th>
-                            <th>BOM base</th>
-                            <th>Gamme base</th>
-                            <th>Statut lien</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var link in _bomLinks)
-                        {
-                            <tr>
-                                <td>@link.ArticleCode</td>
-                                <td>@(link.ProductFamilyCode ?? "—")</td>
-                                <td>@(link.BomBaseCode ?? "—")</td>
-                                <td>@(link.RoutingBaseCode ?? "—")</td>
-                                <td>@link.LinkStatus</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-                @if (_bomLinks.Count == 0)
-                {
-                    <p>Aucun article configuré ou dupliqué pour le moment.</p>
-                }
+                <h3>Nomenclatures et gammes</h3>
+                <p class="hint">L’édition des nomenclatures se fait dans l’onglet dédié.</p>
+                <p><a href="/nomenclatures-gammes">Ouvrir Nomenclatures et gammes →</a></p>
             </section>
             break;
 
@@ -637,6 +613,12 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        if (string.Equals(EffectiveSection, "bom", StringComparison.OrdinalIgnoreCase))
+        {
+            Nav.NavigateTo("/nomenclatures-gammes", replace: true);
+            return;
+        }
+
         try
         {
             await ReloadDataAsync();
@@ -653,16 +635,27 @@ else
         }
     }
 
+    protected override void OnParametersSet()
+    {
+        if (string.Equals(EffectiveSection, "bom", StringComparison.OrdinalIgnoreCase))
+        {
+            Nav.NavigateTo("/nomenclatures-gammes", replace: true);
+        }
+    }
+
     private static List<ArticleListItem> FilterArticles(IReadOnlyList<ArticleListItem> articles, string searchText)
     {
         if (string.IsNullOrWhiteSpace(searchText))
         {
-            return articles.ToList();
+            return articles
+                .OrderBy(a => a.Code, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         var terms = searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return articles
             .Where(article => terms.All(term => MatchesArticle(article, term)))
+            .OrderBy(a => a.Code, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 

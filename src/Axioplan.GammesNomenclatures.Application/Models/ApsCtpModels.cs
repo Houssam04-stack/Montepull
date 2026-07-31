@@ -15,7 +15,8 @@ public sealed record ApsCtpEvaluateRequest(
     string? OrderReference = null,
     string? ArticleCategory = null,
     string? CustomerCategory = null,
-    string? Scenario = null);
+    string? Scenario = null,
+    CalculationSourceType SourceType = CalculationSourceType.Demo);
 
 public sealed record ApsCtpPromiseDto(
     long Id,
@@ -31,7 +32,7 @@ public sealed record ApsCtpPromiseDto(
     double? Hre,
     double? MarginDensity,
     int? FloatDays,
-    string FloatStatus,
+    string? FloatStatus,
     string? CircuitCode,
     string? BathCode,
     string? ExternalEngagement,

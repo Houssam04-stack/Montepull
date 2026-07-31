@@ -59,4 +59,12 @@ public interface IArticleRepository
     Task<IReadOnlyList<TraceabilityItem>> GetTraceabilityAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<BomLinkInfo>> GetBomLinksAsync(CancellationToken cancellationToken = default);
+
+    Task<ArticleBomEditorDto> GetBomForArticleAsync(int finishedGoodArticleId, CancellationToken cancellationToken = default);
+
+    Task<ArticleBomLineDto> UpsertArticleBomLineAsync(
+        UpsertArticleBomLineRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteArticleBomLineAsync(int bomLineId, CancellationToken cancellationToken = default);
 }

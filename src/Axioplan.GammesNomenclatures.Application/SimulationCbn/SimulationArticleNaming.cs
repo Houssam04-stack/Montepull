@@ -26,4 +26,12 @@ public static class SimulationArticleNaming
         var code = NormalizeTemplateCode(articleName);
         return string.Equals(code, "PANTALON_BASE", StringComparison.Ordinal);
     }
+
+    public static bool IsTunimapulfSeed(string articleName)
+    {
+        var code = NormalizeTemplateCode(articleName);
+        return string.Equals(code, "TUNIMAPULF_BASE", StringComparison.Ordinal);
+    }
+
+    public const string TunimapulfSimulationName = "TUNIMAPULF SIM";
 }

@@ -14,11 +14,13 @@ public static class Mvp0Extensions
     public static IServiceCollection AddMvp0Application(this IServiceCollection services)
     {
         services.AddScoped<Mvp0WorkflowService>();
+        services.AddMvp0ApsGateGuard();
+        services.AddMvp0ApsBridge();
         return services;
     }
 }
 
-public sealed class Mvp0WorkflowService(IMvp0Repository repository)
+public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridgeService bridgeService)
 {
     public static IReadOnlyList<string> Steps { get; } =
     [
@@ -90,8 +92,9 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository)
 
     public async Task<IReadOnlyList<(string SheetName, string Csv)>> ConvertExcelAsync(
         byte[] fileContent,
+        string? fileName = null,
         CancellationToken cancellationToken = default)
-        => await repository.ConvertExcelToCsvSheetsAsync(fileContent, cancellationToken);
+        => await repository.ConvertExcelToCsvSheetsAsync(fileContent, fileName, cancellationToken);
 
     public async Task<Mvp0ImportBatchDto> ImportCsvAsync(
         Guid campaignId,
@@ -403,6 +406,7 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository)
             _ => Mvp0CampaignStatuses.Backtested
         };
         await repository.UpdateCampaignStatusAsync(campaignId, status, gate.Outcome, cancellationToken);
+        await bridgeService.PromoteIfApprovedAsync(campaignId, gate, cancellationToken);
         return gate;
     }
 

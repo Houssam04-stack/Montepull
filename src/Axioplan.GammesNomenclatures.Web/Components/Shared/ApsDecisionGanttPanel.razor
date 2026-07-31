@@ -1,0 +1,122 @@
+@using Axioplan.GammesNomenclatures.Domain.Aps.Schedule
+
+<section class="card aps-decision-panel gantt-print-container" id="@_printRootId">
+    <div class="gantt-header">
+        <h3>Aide à la décision — durée &amp; Gantt</h3>
+        <p class="hint no-print">Régénéré automatiquement à chaque calcul APS. Planning dérivé des charges réelles.</p>
+        <p class="print-only gantt-print-meta">Généré le @DateTime.Now.ToString("dd/MM/yyyy HH:mm") - @PanelTitle</p>
+    </div>
+
+    @if (Schedule is null || Schedule.Tasks.Count == 0 || _layout is null)
+    {
+        <p class="hint">Aucune tâche planifiable — lancez une planification pour produire le Gantt.</p>
+    }
+    else
+    {
+        var d = Schedule.Duration;
+        var marginClass = MarginClass(d);
+
+        <div class="aps-kpi-grid gantt-summary">
+            <div class="aps-kpi">
+                <span class="aps-kpi-label">Durée estimée</span>
+                <strong>@d.WorkingDays jours ouvrés</strong>
+                <small>@d.CalendarDays jours calendaires</small>
+            </div>
+            <div class="aps-kpi">
+                <span class="aps-kpi-label">Date de début</span>
+                <strong>@d.StartDate.ToString("dd/MM/yyyy")</strong>
+            </div>
+            <div class="aps-kpi">
+                <span class="aps-kpi-label">Date de fin estimée</span>
+                <strong>@d.EstimatedEndDate.ToString("dd/MM/yyyy")</strong>
+            </div>
+            <div class="@marginClass">
+                <span class="aps-kpi-label">Marge restante</span>
+                <strong>@(d.MarginWorkingDays?.ToString() ?? "-") jours ouvrés</strong>
+            </div>
+            <div class="aps-kpi">
+                <span class="aps-kpi-label">Date de besoin</span>
+                <strong>@(d.NeedDate?.ToString("dd/MM/yyyy") ?? "-")</strong>
+            </div>
+            <div class="aps-kpi">
+                <span class="aps-kpi-label">Taux de charge max (rho)</span>
+                <strong>@(d.MaxLoadRate?.ToString("P1") ?? "-")</strong>
+            </div>
+            <div class="aps-kpi aps-kpi-bottleneck">
+                <span class="aps-kpi-label">Ressource goulot</span>
+                <strong>@(d.BottleneckResourceCode ?? "-")</strong>
+                <small>@d.BottleneckExplanation</small>
+            </div>
+        </div>
+
+        <div class="inline-form aps-export-bar no-print">
+            <button type="button" class="btn-secondary btn-sm" @onclick="ExportCsvAsync" disabled="@_exportBusy">CSV tâches</button>
+            <button type="button" class="btn-secondary btn-sm" @onclick="ExportExcelAsync" disabled="@_exportBusy">Excel</button>
+            <button type="button" class="btn-secondary btn-sm" @onclick="ExportSvgAsync" disabled="@_exportBusy">SVG</button>
+            <button type="button" class="btn-secondary btn-sm" @onclick="ExportPngAsync" disabled="@_exportBusy">PNG</button>
+            <button type="button" class="btn-primary btn-sm" @onclick="ExportPdfAsync" disabled="@_exportBusy">PDF / Imprimer</button>
+        </div>
+        @if (!string.IsNullOrEmpty(_exportInfo))
+        {
+            <p class="hint no-print">@_exportInfo</p>
+        }
+
+        <div class="gantt-shell">
+            <div class="gantt-left-panel" style="width:@LeftWidthPx">
+                <div class="gantt-left-head gantt-cols" style="height:@HeaderHeightPx">
+                    <div class="col-el">Élément</div>
+                    <div class="col-qty">Qté</div>
+                    <div class="col-status">Statut</div>
+                    <div class="col-date">Début</div>
+                    <div class="col-date">Fin</div>
+                    <div class="col-dur">Durée</div>
+                </div>
+                @foreach (var row in _layout.Rows)
+                {
+                    <div class="@RowClass(row)" style="height:@(row.RowHeight.ToString(System.Globalization.CultureInfo.InvariantCulture))px">
+                        <div class="gantt-cols gantt-left-row-inner">
+                            <div class="col-el">
+                                <span class="gantt-tree" style="padding-left:@(row.Indent * 16)px">
+                                    <span class="gantt-chevron">@(row.Level == ApsGanttRowLevel.WorkOrder ? "▾" : row.Level == ApsGanttRowLevel.Operation ? "›" : "·")</span>
+                                    <span class="@NameClass(row)" title="@row.DisplayName">@row.DisplayName</span>
+                                </span>
+                            </div>
+                            <div class="col-qty">@row.QuantityText</div>
+                            <div class="col-status">
+                                <span class="@StatusClass(row)">@row.StatusLabel</span>
+                            </div>
+                            <div class="col-date">@row.StartText</div>
+                            <div class="col-date">@row.EndText</div>
+                            <div class="col-dur">@row.DurationText</div>
+                        </div>
+                    </div>
+                }
+            </div>
+            <div class="gantt-right" tabindex="0">
+                <div class="gantt-right-inner" style="width:@TimelineWidthPx">
+                    @((MarkupString)_layout.TimelineSvgMarkup)
+                </div>
+            </div>
+        </div>
+
+        <div class="aps-gantt-legend gantt-legend">
+            <span><i class="lg lg-plan"></i> Planifié</span>
+            <span><i class="lg lg-progress"></i> En cours</span>
+            <span><i class="lg lg-late"></i> Retard</span>
+            <span><i class="lg lg-sat"></i> Saturé</span>
+            <span><i class="lg lg-done"></i> Terminé</span>
+            <span><i class="lg lg-crit"></i> Chemin critique</span>
+            <span><i class="lg lg-goulot"></i> Goulot</span>
+            <span><i class="lg lg-today"></i> Aujourd'hui</span>
+            <span><i class="lg lg-need"></i> Date de besoin</span>
+        </div>
+
+        @if (_layout.CriticalPathLabels.Count > 0)
+        {
+            <div class="gantt-critical-path">
+                <strong>Chemin critique</strong>
+                <p>@string.Join(" → ", _layout.CriticalPathLabels)</p>
+            </div>
+        }
+    }
+</section>

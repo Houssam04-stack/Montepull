@@ -27,7 +27,8 @@ public sealed class SqlServerPeggingRepository(
         var bidirectional = await LoadBidirectionalFlagAsync(connection, cancellationToken);
         var needs = await LoadMaterialNeedsAsync(connection, request.CbnRunId, cancellationToken);
         var salesLines = await LoadSalesLineSuppliesAsync(connection, request.CbnRunId, cancellationToken);
-        var mfgOrders = await LoadManufacturingSuppliesAsync(connection, cancellationToken);
+        var dataset = await LoadActiveDatasetAsync(connection, cancellationToken);
+        var mfgOrders = await LoadManufacturingSuppliesAsync(connection, dataset, cancellationToken);
         var purchaseLines = await LoadPurchaseSuppliesAsync(connection, cancellationToken);
         var stocks = await LoadStockSuppliesAsync(connection, cancellationToken);
 
@@ -92,7 +93,8 @@ public sealed class SqlServerPeggingRepository(
         }
 
         var salesLines = await LoadSalesLineSuppliesAsync(connection, cbnRunId, cancellationToken);
-        var mfgOrders = await LoadManufacturingSuppliesAsync(connection, cancellationToken);
+        var dataset = await LoadActiveDatasetAsync(connection, cancellationToken);
+        var mfgOrders = await LoadManufacturingSuppliesAsync(connection, dataset, cancellationToken);
         var purchaseLines = await LoadPurchaseSuppliesAsync(connection, cancellationToken);
         var stocks = await LoadStockSuppliesAsync(connection, cancellationToken);
         return await BuildSupplyUsageForRunAsync(connection, latestRunId.Value, salesLines, mfgOrders, purchaseLines, stocks, cancellationToken);
@@ -186,15 +188,31 @@ public sealed class SqlServerPeggingRepository(
         return await ReadSuppliesAsync(command, "SALES_ORDER_LINE", cancellationToken);
     }
 
+    private static async Task<string> LoadActiveDatasetAsync(SqlConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            IF OBJECT_ID('mp_dataset_config') IS NULL SELECT N'DEMO';
+            ELSE SELECT TOP 1 active_dataset FROM mp_dataset_config ORDER BY id DESC;
+            """;
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is string s && !string.IsNullOrWhiteSpace(s) ? s.Trim().ToUpperInvariant() : "DEMO";
+    }
+
     private static async Task<List<PeggingEngine.SupplyCandidate>> LoadManufacturingSuppliesAsync(
-        SqlConnection connection, CancellationToken cancellationToken)
+        SqlConnection connection, string dataset, CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT mo.id, mo.code, mo.article_id, mo.quantity, mo.unit
             FROM manufacturing_orders mo
             WHERE mo.status IN ('PLANNED', 'RELEASED')
+              AND (
+                    (@dataset = N'MONTEPULL_REAL' AND mo.data_source = N'MONTEPULL_REAL' AND ISNULL(mo.is_active, 1) = 1)
+                    OR (@dataset <> N'MONTEPULL_REAL' AND (mo.data_source IS NULL OR mo.data_source <> N'MONTEPULL_REAL' OR ISNULL(mo.is_active, 1) = 1))
+                  )
             """;
+        command.Parameters.AddWithValue("@dataset", dataset);
 
         return await ReadSuppliesAsync(command, "MANUFACTURING_ORDER", cancellationToken);
     }

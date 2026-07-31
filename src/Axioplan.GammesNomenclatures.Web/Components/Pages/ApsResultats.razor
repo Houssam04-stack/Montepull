@@ -1,17 +1,199 @@
 @page "/aps/resultats"
 @rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Aps
+@using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Schedule
+@inject ApsFluxService FluxService
+@inject ApsScheduleDecisionService DecisionService
 
 <PageTitle>Résultats planification</PageTitle>
 
 <PageHeader Title="Résultats planification APS"
-            Description="Consultation des sorties après planification — flux publiés, charges et historique goulot." />
+            Description="Historique des runs publiés — charges, saturation ρ et goulot identifié." />
+
+<DatasetBanner />
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
 
 <section class="card">
-    <p>Accédez aux résultats via les parcours suivants :</p>
+    <h3>Runs de planification publiés</h3>
+    @if (_runs.Count == 0)
+    {
+        <p class="hint">Aucun run publié — lancez une <a href="/aps/planification">planification</a> avec l'option « Publier flux ».</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr>
+                    <th>Id</th>
+                    <th>Fenêtre</th>
+                    <th>Goulot</th>
+                    <th>Créé</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var run in _runs)
+            {
+                <tr class="@(run.Id == _selectedRunId ? "row-selected" : null)">
+                    <td>@run.Id</td>
+                    <td>@run.From → @run.To</td>
+                    <td><strong>@(run.BottleneckCode ?? "—")</strong></td>
+                    <td>@run.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                    <td>
+                        <button class="btn-secondary btn-sm" @onclick="() => SelectRunAsync(run.Id)">Voir détail</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</section>
+
+@if (_detail is not null)
+{
+    <section class="card">
+        <h3>Détail run #@_selectedRunId</h3>
+        <p><strong>Goulot :</strong> @_detail.Bottleneck.ConstrainingCode — @_detail.Bottleneck.Explanation</p>
+    </section>
+
+    @if (_decision is not null)
+    {
+        <ApsDecisionGanttPanel Schedule="_decision" PanelTitle="@($"Run #{_selectedRunId}")" GanttSvgId="aps-result-gantt" />
+    }
+
+    <section class="card">
+        <h3>Saturation ρ = Charge / Capacité</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ressource</th>
+                    <th class="num">Charge cum.</th>
+                    <th class="num">Cap cum.</th>
+                    <th class="num">ρ</th>
+                    <th class="num">ρ cible</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var sat in _detail.Saturations)
+            {
+                <tr class="@SatRowClass(sat.Status)">
+                    <td>@sat.ResourceCode</td>
+                    <td class="num">@sat.ChargeCumulee.ToString("F2")</td>
+                    <td class="num">@sat.CapCum.ToString("F2")</td>
+                    <td class="num">@(sat.Rho?.ToString("F3") ?? "—")</td>
+                    <td class="num">@sat.RhoTarget.ToString("F2")</td>
+                    <td><strong>@sat.Status</strong></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+
+    <section class="card">
+        <h3>Charges par bucket</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ressource</th>
+                    <th>Date</th>
+                    <th class="num">Qté lancer</th>
+                    <th class="num">Charge</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var load in _detail.Loads.Where(l => l.CapacityType != "EXTERNE"))
+            {
+                <tr>
+                    <td>@load.ResourceCode</td>
+                    <td>@load.BucketDate</td>
+                    <td class="num">@load.QtyToLaunch.ToString("F2")</td>
+                    <td class="num">@load.Charge.ToString("F4")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}
+
+@if (_bottleneckHistory.Count > 0)
+{
+    <section class="card">
+        <h3>Historique goulots (journal)</h3>
+        <table>
+            <thead><tr><th>Date</th><th>Code</th><th>Type</th><th>Explication</th></tr></thead>
+            <tbody>
+            @foreach (var (at, bnCode, kind, explanation) in _bottleneckHistory)
+            {
+                <tr>
+                    <td>@at.ToLocalTime().ToString("g")</td>
+                    <td>@bnCode</td>
+                    <td>@kind</td>
+                    <td>@explanation</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}
+
+<section class="card">
+    <h3>Accès rapides</h3>
     <ul class="link-list">
         <li><a href="/aps/planification">Lancer une planification</a></li>
-        <li><a href="/charges-capacites/flux">Saturation et comparaison charge / capacité</a></li>
-        <li><a href="/charges-capacites/charges">Charges calculées et runs publiés</a></li>
+        <li><a href="/charges-capacites/flux">Saturation et comparaison</a></li>
+        <li><a href="/charges-capacites/charges">Charges calculées</a></li>
         <li><a href="/aps/journal">Journal APS</a></li>
     </ul>
 </section>
+
+@code {
+    private List<ApsLoadRunSummaryDto> _runs = [];
+    private List<(DateTime At, string Code, string Kind, string Explanation)> _bottleneckHistory = [];
+    private ApsFluxComputeResultDto? _detail;
+    private ApsScheduleDecisionResult? _decision;
+    private long? _selectedRunId;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await FluxService.EnsureReadyAsync();
+            _runs = (await FluxService.ListLoadRunsAsync()).ToList();
+            _bottleneckHistory = (await FluxService.ListBottleneckHistoryAsync()).ToList();
+
+            if (_runs.Count > 0)
+            {
+                await SelectRunAsync(_runs[0].Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SelectRunAsync(long runId)
+    {
+        _selectedRunId = runId;
+        _detail = await FluxService.GetLoadRunAsync(runId);
+        if (_detail is null)
+        {
+            _error = $"Run #{runId} — détail indisponible (result_json absent).";
+            _decision = null;
+            return;
+        }
+
+        _decision = DecisionService.BuildFromFlux(_detail);
+        _error = null;
+    }
+
+    private static string? SatRowClass(string status)
+        => status is "DEPASSEMENT" or "SATUREE" ? "row-warning" : null;
+}

@@ -28,7 +28,7 @@
         <div class="form-grid">
             <div>
                 <label>Campagne</label>
-                <select class="form-control" @bind="_campaignId">
+                <select class="form-control" value="@_campaignId" @onchange="OnCampaignChanged">
                     <option value="">—</option>
                     @foreach (var c in _list)
                     {
@@ -68,6 +68,11 @@
         {
             _message = "Plusieurs campagnes actives — sélectionnez celle à ouvrir.";
         }
+    }
+
+    private void OnCampaignChanged(ChangeEventArgs e)
+    {
+        _campaignId = e.Value?.ToString() ?? "";
     }
 
     private void Open()

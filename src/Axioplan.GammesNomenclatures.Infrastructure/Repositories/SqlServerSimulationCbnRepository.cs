@@ -641,6 +641,240 @@ public sealed class SqlServerSimulationCbnRepository(IOptions<DatabaseOptions> o
         await EnsureDefaultDuplicationOptionsAsync(simulationId, cancellationToken);
     }
 
+    public async Task<SimulationHeaderDto> EnsureTunimapulfSimulationAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+
+        var existing = (await ListSimulationsAsync(cancellationToken))
+            .FirstOrDefault(s => string.Equals(s.Name, SimulationArticleNaming.TunimapulfSimulationName, StringComparison.OrdinalIgnoreCase));
+
+        var simulation = existing ?? await CreateSimulationAsync(
+            new CreateSimulationRequest(
+                SimulationArticleNaming.TunimapulfSimulationName,
+                "Simulation Montepull — duplication taille/couleur + CBN (stocks synchronises)"),
+            cancellationToken);
+
+        await SeedTunimapulfDemoAsync(simulation.Id, cancellationToken);
+        await SyncStocksIntoSimCbnParametersAsync(simulation.Id, cancellationToken);
+        await EnsureTunimapulfVariantsAsync(simulation.Id, cancellationToken);
+        return (await GetSimulationAsync(simulation.Id, cancellationToken))!;
+    }
+
+    private async Task EnsureTunimapulfVariantsAsync(int simulationId, CancellationToken cancellationToken)
+    {
+        var articles = await GetArticlesAsync(simulationId, cancellationToken);
+        var template = articles.FirstOrDefault(a => a.Code == "TUNIMAPULF_BASE" && a.IsTemplate);
+        if (template is null)
+        {
+            return;
+        }
+
+        if (articles.Any(a => a.IsGenerated && a.BaseArticleId == template.Id))
+        {
+            return;
+        }
+
+        var options = await GetDuplicationOptionsAsync(simulationId, cancellationToken);
+        var sizes = options.Sizes.Where(s => s.IsSelected).Select(s => new SizeCoefficientInput(s.Size, s.Coefficient)).ToList();
+        var colors = options.Colors.Where(c => c.IsSelected).Select(c => new ColorCoefficientInput(c.Color, c.Coefficient)).ToList();
+        if (sizes.Count == 0 || colors.Count == 0)
+        {
+            sizes = DuplicationOptionsDefaults.Sizes.Select(s => new SizeCoefficientInput(s.Size, s.Coefficient)).ToList();
+            colors = DuplicationOptionsDefaults.Colors.Select(c => new ColorCoefficientInput(c.Color, c.Coefficient)).ToList();
+        }
+
+        await GenerateVariantsAsync(
+            new GenerateVariantsRequest(simulationId, template.Id, sizes, colors),
+            cancellationToken);
+        await SyncStocksIntoSimCbnParametersAsync(simulationId, cancellationToken);
+    }
+
+    public async Task SyncStocksIntoSimCbnParametersAsync(int simulationId, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await using var connection = OpenConnection();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE p
+            SET on_hand_stock = sb.quantity_available
+            FROM sim_cbn_parameters p
+            INNER JOIN sim_articles sa ON sa.id = p.article_id AND sa.simulation_id = p.simulation_id
+            INNER JOIN articles a ON a.code = sa.code
+            INNER JOIN stock_balances sb ON sb.article_id = a.id
+            WHERE p.simulation_id = @sim
+            """;
+        command.Parameters.AddWithValue("@sim", simulationId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Seed TUNIMAPULF_BASE + composants codes stocks Montepull + BOM/gamme + options duplication.
+    /// </summary>
+    private async Task SeedTunimapulfDemoAsync(int simulationId, CancellationToken cancellationToken)
+    {
+        await using var connection = OpenConnection();
+
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "SELECT COUNT(*) FROM sim_articles WHERE simulation_id = @id AND code = 'TUNIMAPULF_BASE'";
+            check.Parameters.AddWithValue("@id", simulationId);
+            if (Convert.ToInt32(await check.ExecuteScalarAsync(cancellationToken)) > 0)
+            {
+                await EnsureDefaultDuplicationOptionsAsync(simulationId, cancellationToken);
+                return;
+            }
+        }
+
+        async Task<int> InsertArticle(
+            string code,
+            string designation,
+            string type,
+            string procurement,
+            int leadTime,
+            bool isTemplate = false)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO sim_articles (simulation_id, code, designation, article_type, size, color, is_template, is_generated, procurement_type, lead_time_days, unit, is_simulated)
+                OUTPUT INSERTED.id
+                VALUES (@sim, @code, @des, @type, NULL, NULL, @template, 0, @proc, @lead, 'UN', 1)
+                """;
+            cmd.Parameters.AddWithValue("@sim", simulationId);
+            cmd.Parameters.AddWithValue("@code", code);
+            cmd.Parameters.AddWithValue("@des", designation);
+            cmd.Parameters.AddWithValue("@type", type);
+            cmd.Parameters.AddWithValue("@template", isTemplate);
+            cmd.Parameters.AddWithValue("@proc", procurement);
+            cmd.Parameters.AddWithValue("@lead", leadTime);
+            return (int)(await cmd.ExecuteScalarAsync(cancellationToken) ?? throw new InvalidOperationException());
+        }
+
+        // Composants : codes presents dans stock_balances (sync CBN apres seed).
+        var componentSpecs = new (string Code, string Label, double Qty, bool SizeCoef, int Lead)[]
+        {
+            ("AC240018", "Composant AC240018", 1.20, true, 4),
+            ("EL240112", "Composant EL240112", 0.05, true, 2),
+            ("EL240111", "Composant EL240111", 1.00, false, 2),
+            ("AV240014", "Composant AV240014", 1.00, false, 3),
+        };
+
+        var labels = await LoadArticleLabelsAsync(connection, componentSpecs.Select(c => c.Code).ToArray(), cancellationToken);
+
+        var baseId = await InsertArticle(
+            "TUNIMAPULF_BASE",
+            "TUNIMAPULF (template)",
+            SimulationArticleTypes.FinishedGood,
+            SimulationProcurementTypes.Manufactured,
+            5,
+            isTemplate: true);
+
+        var componentIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (code, fallbackLabel, _, _, lead) in componentSpecs)
+        {
+            var label = labels.TryGetValue(code, out var fromStock) ? fromStock : fallbackLabel;
+            componentIds[code] = await InsertArticle(
+                code,
+                label,
+                SimulationArticleTypes.Purchased,
+                SimulationProcurementTypes.Purchased,
+                lead);
+        }
+
+        async Task InsertBom(int parent, int component, double qty, bool sizeCoef)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO sim_bom_lines (simulation_id, parent_article_id, component_article_id, quantity_per, scrap_rate, offset_days, apply_size_coefficient, apply_color_substitution, is_generated, is_simulated, nomenclature_type, alternative)
+                VALUES (@sim, @parent, @comp, @qty, 0, 0, @size, 0, 0, 1, @nomType, 0)
+                """;
+            cmd.Parameters.AddWithValue("@sim", simulationId);
+            cmd.Parameters.AddWithValue("@parent", parent);
+            cmd.Parameters.AddWithValue("@comp", component);
+            cmd.Parameters.AddWithValue("@qty", qty);
+            cmd.Parameters.AddWithValue("@size", sizeCoef);
+            cmd.Parameters.AddWithValue("@nomType", SimulationNomenclatureTypes.Base);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var (code, _, qty, sizeCoef, _) in componentSpecs)
+        {
+            await InsertBom(baseId, componentIds[code], qty, sizeCoef);
+        }
+
+        async Task InsertOp(int articleId, int no, string name, double run, bool sizeCoef)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO sim_routing_operations (simulation_id, article_id, operation_number, operation_name, work_center, setup_time_minutes, run_time_minutes, queue_time_minutes, move_time_minutes, apply_size_coefficient, apply_color_coefficient, is_generated, is_simulated)
+                VALUES (@sim, @art, @no, @name, @wc, 0, @run, 0, 0, @size, 0, 0, 1)
+                """;
+            cmd.Parameters.AddWithValue("@sim", simulationId);
+            cmd.Parameters.AddWithValue("@art", articleId);
+            cmd.Parameters.AddWithValue("@no", no);
+            cmd.Parameters.AddWithValue("@name", name);
+            cmd.Parameters.AddWithValue("@wc", "ATELIER");
+            cmd.Parameters.AddWithValue("@run", run);
+            cmd.Parameters.AddWithValue("@size", sizeCoef);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await InsertOp(baseId, 10, "Preparation", 8, true);
+        await InsertOp(baseId, 20, "Assemblage", 20, true);
+        await InsertOp(baseId, 30, "Controle", 3, false);
+        await InsertOp(baseId, 40, "Emballage", 2, false);
+
+        async Task InsertParam(int articleId, int lead)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO sim_cbn_parameters (simulation_id, article_id, on_hand_stock, safety_stock, reserved_quantity, scheduled_receipt_production, scheduled_receipt_purchase, lead_time_days, lot_rule, min_lot, multiple_lot, is_simulated)
+                VALUES (@sim, @art, 0, 0, 0, 0, 0, @lead, 'LotForLot', 0, 1, 1)
+                """;
+            cmd.Parameters.AddWithValue("@sim", simulationId);
+            cmd.Parameters.AddWithValue("@art", articleId);
+            cmd.Parameters.AddWithValue("@lead", lead);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await InsertParam(baseId, 5);
+        foreach (var (code, _, _, _, lead) in componentSpecs)
+        {
+            await InsertParam(componentIds[code], lead);
+        }
+
+        await EnsureDefaultDuplicationOptionsAsync(simulationId, cancellationToken);
+    }
+
+    private static async Task<Dictionary<string, string>> LoadArticleLabelsAsync(
+        SqlConnection connection,
+        IReadOnlyList<string> codes,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (codes.Count == 0)
+        {
+            return result;
+        }
+
+        await using var cmd = connection.CreateCommand();
+        var parameters = new List<string>();
+        for (var i = 0; i < codes.Count; i++)
+        {
+            var name = $"@c{i}";
+            parameters.Add(name);
+            cmd.Parameters.AddWithValue(name, codes[i]);
+        }
+
+        cmd.CommandText = $"SELECT code, label FROM articles WHERE code IN ({string.Join(",", parameters)})";
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result[reader.GetString(0)] = reader.IsDBNull(1) ? reader.GetString(0) : reader.GetString(1);
+        }
+
+        return result;
+    }
+
     public async Task<DuplicationOptionsDto> GetDuplicationOptionsAsync(
         int simulationId,
         CancellationToken cancellationToken = default)
@@ -752,6 +986,15 @@ public sealed class SqlServerSimulationCbnRepository(IOptions<DatabaseOptions> o
             var pantalonArticles = await GetArticlesAsync(request.SimulationId, cancellationToken);
             var pantalon = pantalonArticles.First(a => a.Code == "PANTALON_BASE");
             return new SeedTemplateArticleResult(pantalon.Id, pantalon.Code, false);
+        }
+
+        if (SimulationArticleNaming.IsTunimapulfSeed(request.ArticleName))
+        {
+            await SeedTunimapulfDemoAsync(request.SimulationId, cancellationToken);
+            await SyncStocksIntoSimCbnParametersAsync(request.SimulationId, cancellationToken);
+            var tunimaArticles = await GetArticlesAsync(request.SimulationId, cancellationToken);
+            var tunima = tunimaArticles.First(a => a.Code == "TUNIMAPULF_BASE");
+            return new SeedTemplateArticleResult(tunima.Id, tunima.Code, false);
         }
 
         await EnsureSchemaAsync(cancellationToken);

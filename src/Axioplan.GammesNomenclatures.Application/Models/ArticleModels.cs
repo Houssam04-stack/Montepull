@@ -171,3 +171,36 @@ public sealed record BomLinkInfo(
     string? BomBaseCode,
     string? RoutingBaseCode,
     string LinkStatus);
+
+/// <summary>Nomenclature métier d'un article (produit fini).</summary>
+public sealed record ArticleBomEditorDto(
+    int ArticleId,
+    string ArticleCode,
+    string ArticleLabel,
+    int? BomBaseId,
+    string? BomCode,
+    IReadOnlyList<ArticleBomLineDto> Lines);
+
+public sealed record ArticleBomLineDto(
+    int Id,
+    int LineNo,
+    int ComponentArticleId,
+    string ComponentCode,
+    string? ComponentLabel,
+    double Quantity,
+    string Unit,
+    double LossRate,
+    int? SizeOptionId,
+    string? SizeCode,
+    int? ColorOptionId,
+    string? ColorCode);
+
+public sealed record UpsertArticleBomLineRequest(
+    int FinishedGoodArticleId,
+    int? LineId,
+    int ComponentArticleId,
+    double Quantity,
+    string Unit,
+    int? SizeOptionId = null,
+    int? ColorOptionId = null,
+    double LossRate = 0);

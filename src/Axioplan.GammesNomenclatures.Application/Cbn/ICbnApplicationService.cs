@@ -16,6 +16,15 @@ public interface ICbnApplicationService
         int salesOrderId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<ImportedSalesOrderDetail>> GetImportedSalesOrdersDetailAsync(
+        CancellationToken cancellationToken = default);
+
+    Task EnsureTunimapulfSalesOrderAsync(CancellationToken cancellationToken = default);
+
+    Task<ImportedSalesOrderDetail> UpsertImportedSalesOrderLineAsync(
+        UpsertImportedSalesOrderLineRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<CbnApplicationRunResult<CbnRunResult>> RunRealAsync(
         CbnRunRequest request,
         CancellationToken cancellationToken = default);

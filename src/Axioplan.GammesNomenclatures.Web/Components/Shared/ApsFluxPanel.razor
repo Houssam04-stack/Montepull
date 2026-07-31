@@ -1,6 +1,8 @@
 @using Axioplan.GammesNomenclatures.Application.Aps
 @using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Domain.Aps.Schedule
 @inject ApsFluxService FluxService
+@inject ApsScheduleDecisionService DecisionService
 
 @if (ShowPageHeader)
 {
@@ -182,6 +184,11 @@
             }
         </ul>
     </section>
+
+    @if (_decision is not null)
+    {
+        <ApsDecisionGanttPanel Schedule="_decision" PanelTitle="Flux APS" GanttSvgId="aps-flux-gantt" />
+    }
 }
 
 @code {
@@ -191,6 +198,7 @@
     private DateOnly _to = DateOnly.FromDateTime(DateTime.Today.AddDays(6));
     private long? _cbnRunId;
     private ApsFluxComputeResultDto? _result;
+    private ApsScheduleDecisionResult? _decision;
     private List<(DateTime At, string Code, string Kind, string Explanation)> _history = [];
     private string? _error;
     private bool _busy;
@@ -202,11 +210,13 @@
         try
         {
             _result = await FluxService.ComputeAsync(new ApsFluxWindowRequest(_from, _to, _cbnRunId, publish));
+            _decision = DecisionService.BuildFromFlux(_result);
             _history = (await FluxService.ListBottleneckHistoryAsync()).ToList();
         }
         catch (Exception ex)
         {
             _error = ex.Message;
+            _decision = null;
         }
         finally
         {

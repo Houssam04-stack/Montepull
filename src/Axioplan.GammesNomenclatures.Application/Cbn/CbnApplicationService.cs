@@ -17,6 +17,17 @@ public sealed class CbnApplicationService(
         CancellationToken cancellationToken = default)
         => realCbn.GetSalesOrderLinesAsync(salesOrderId, cancellationToken);
 
+    public Task<IReadOnlyList<ImportedSalesOrderDetail>> GetImportedSalesOrdersDetailAsync(CancellationToken cancellationToken = default)
+        => realCbn.GetImportedSalesOrdersDetailAsync(cancellationToken);
+
+    public Task EnsureTunimapulfSalesOrderAsync(CancellationToken cancellationToken = default)
+        => realCbn.EnsureTunimapulfSalesOrderAsync(cancellationToken);
+
+    public Task<ImportedSalesOrderDetail> UpsertImportedSalesOrderLineAsync(
+        UpsertImportedSalesOrderLineRequest request,
+        CancellationToken cancellationToken = default)
+        => realCbn.UpsertImportedSalesOrderLineAsync(request, cancellationToken);
+
     public async Task<CbnApplicationRunResult<CbnRunResult>> RunRealAsync(
         CbnRunRequest request,
         CancellationToken cancellationToken = default)

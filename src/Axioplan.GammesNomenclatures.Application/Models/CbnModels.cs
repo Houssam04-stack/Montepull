@@ -14,6 +14,57 @@ public sealed record SalesOrderLineItem(
     string Unit,
     string? ExternalRef);
 
+/// <summary>Commande métier importée (Montepull / sales_orders) pour l'onglet Commandes.</summary>
+public sealed record ImportedSalesOrderDetail(
+    int Id,
+    string Code,
+    string? Label,
+    string? CustomerCode,
+    string Status,
+    DateTime? OrderDate,
+    string? DataSource,
+    int? ImportBatchId,
+    int LineCount,
+    double TotalQuantity,
+    string ArticlePreview,
+    IReadOnlyList<ImportedSalesOrderLineDetail> Lines);
+
+/// <summary>Ligne au format commandes.xlsx (champs métier + optionnels staging).</summary>
+public sealed record ImportedSalesOrderLineDetail(
+    int Id,
+    int LineNo,
+    string ArticleCode,
+    string? Designation,
+    string? SizeCode,
+    string? ColorCode,
+    double Quantity,
+    double QtyLaunched,
+    double QtyProduced,
+    int? LastOperation,
+    double? SommeOperations,
+    double? SommeOp70Commande,
+    double? SommeOp70Article,
+    string Unit,
+    string? ExternalRef,
+    double? RemainingToLaunch,
+    double? RemainingToProduce,
+    DateTime? DeliveryDate);
+
+/// <summary>Création / mise à jour d'une ligne de commande (mêmes champs que commandes.xlsx).</summary>
+public sealed record UpsertImportedSalesOrderLineRequest(
+    string OrderCode,
+    string? CustomerCode,
+    string ArticleCode,
+    string? Designation,
+    double QtyOrdered,
+    double QtyLaunched = 0,
+    double QtyProduced = 0,
+    int? LastOperation = null,
+    double? SommeOperations = null,
+    double? SommeOp70Commande = null,
+    double? SommeOp70Article = null,
+    string? DataSource = null);
+
 public sealed record CbnRunRequest(int SalesOrderId, string ProductFamilyCode);
 
 public sealed record CbnFlattenedBomRow(

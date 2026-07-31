@@ -1,4 +1,7 @@
 @page "/simulation-mrp"
+@page "/consultation/cbn"
+@page "/cbn"
+@page "/consultation"
 @rendermode InteractiveServer
 @using Axioplan.GammesNomenclatures.Application.Cbn
 @using Axioplan.GammesNomenclatures.Application.Models
@@ -10,13 +13,18 @@
 @inject ICbnApplicationService CbnApplication
 @inject NavigationManager Navigation
 
-<PageTitle>Simulation MRP — Duplication &amp; CBN</PageTitle>
+<PageTitle>CBN — Duplication, commandes &amp; calcul</PageTitle>
 
-<h2>Simulation MRP</h2>
-<p class="lead">
-    Module isole (tables <code>sim_*</code>) : duplication taille/couleur puis CBN/MRP classique
-    (LLC, explosion controlee, besoin brut/net, OF/OA, pegging).
-</p>
+<PageHeader Title="CBN — Duplication, commandes &amp; calcul"
+            Description="Un seul module : simulation (Duplication / Nomenclatures / CBN) et métier (Commandes / Calcul)." />
+
+@if (_selectedSimulationId > 0 && _simulations.Any(s => s.Id == _selectedSimulationId && string.Equals(s.Name, SimulationArticleNaming.TunimapulfSimulationName, StringComparison.OrdinalIgnoreCase)))
+{
+    <AlertPanel Variant="success" Title="Simulation TUNIMAPULF active">
+        Onglets <strong>Duplication</strong> → <strong>CBN</strong> pour la simulation ;
+        onglet <strong>Métier</strong> pour les commandes importées et le calcul réel.
+    </AlertPanel>
+}
 
 @if (!string.IsNullOrWhiteSpace(_error))
 {
@@ -27,6 +35,19 @@
     <div class="alert alert-success">@_message</div>
 }
 
+<div class="tabs mb-3" role="tablist" aria-label="CBN unifié">
+    <button type="button" class="tab-btn @(_activeTab == "duplication" ? "active" : null)" @onclick='() => SetTab("duplication")'>Duplication</button>
+    <button type="button" class="tab-btn @(_activeTab == "nomenclatures" ? "active" : null)" @onclick="SwitchToNomenclaturesTabAsync">Nomenclatures</button>
+    <button type="button" class="tab-btn @(_activeTab == "cbn" ? "active" : null)" @onclick='() => SetTab("cbn")'>CBN</button>
+    <button type="button" class="tab-btn @(_activeTab == "metier" ? "active" : null)" @onclick='() => SetTab("metier")'>Métier — Commandes &amp; calcul</button>
+</div>
+
+@if (_activeTab == "metier")
+{
+    <CbnMetierPanel InitialTab="@_metierSubTab" />
+}
+else
+{
 <section class="card">
     <div class="form-grid">
         <div>
@@ -45,18 +66,15 @@
         <div class="inline-form" style="align-items:end">
             <input class="form-control" placeholder="Nom nouvelle simulation" @bind="_newSimulationName" @bind:event="oninput" />
             <button class="btn-primary btn-sm" @onclick="CreateSimulationAsync" disabled="@_busy">Creer</button>
+            <button type="button" class="btn-secondary btn-sm" @onclick="EnsureTunimapulfAsync" disabled="@_busy">
+                Recreer TUNIMAPULF
+            </button>
         </div>
     </div>
 </section>
 
 @if (_selectedSimulationId > 0)
 {
-    <div class="tabs">
-        <button type="button" class="tab-btn @(_activeTab == "duplication" ? "active" : null)" @onclick='() => _activeTab = "duplication"'>Duplication</button>
-        <button type="button" class="tab-btn @(_activeTab == "nomenclatures" ? "active" : null)" @onclick="SwitchToNomenclaturesTabAsync">Nomenclatures</button>
-        <button type="button" class="tab-btn @(_activeTab == "cbn" ? "active" : null)" @onclick='() => _activeTab = "cbn"'>CBN</button>
-    </div>
-
     @if (_activeTab == "duplication")
     {
         <section class="card">
@@ -394,7 +412,7 @@
             }
         </section>
     }
-    else
+    else if (_activeTab == "cbn")
     {
         <section class="card">
             <h3>Tab CBN</h3>
@@ -735,6 +753,13 @@
             </section>
         }
     }
+    else
+    {
+        <section class="card">
+            <p class="hint">Choisissez ou créez une simulation (ex. <strong>Recreer TUNIMAPULF</strong>), ou ouvrez l’onglet <strong>Métier — Commandes &amp; calcul</strong>.</p>
+        </section>
+    }
+}
 }
 
 @code {
@@ -742,12 +767,13 @@
     private string? _error;
     private string? _message;
     private string _activeTab = "duplication";
+    private string _metierSubTab = "importees";
     private string _resultTab = "flat";
 
     private List<SimulationHeaderDto> _simulations = [];
     private int _selectedSimulationId;
-    private string _newSimulationName = "Demo Pantalon";
-    private string _seedArticleName = "PANTALON";
+    private string _newSimulationName = "TUNIMAPULF SIM";
+    private string _seedArticleName = "TUNIMAPULF";
 
     private List<SimulationArticleDto> _articles = [];
     private List<SimulationBomLineDto> _bomLines = [];
@@ -789,10 +815,28 @@
         try
         {
             await SimulationService.EnsureSchemaAsync();
+            var query = QueryHelpers.ParseQuery(Navigation.ToAbsoluteUri(Navigation.Uri).Query);
+            if (query.TryGetValue("ensure", out var ensure)
+                && string.Equals(ensure.FirstOrDefault(), "tunimapulf", StringComparison.OrdinalIgnoreCase))
+            {
+                var tunima = await SimulationService.EnsureTunimapulfSimulationAsync();
+                _simulations = (await SimulationService.ListAsync()).ToList();
+                _selectedSimulationId = tunima.Id;
+                _seedArticleName = "TUNIMAPULF";
+                ResolveTabFromUri(query);
+                SyncSimulationUri();
+                await LoadSimulationDataAsync();
+                _message = $"Simulation {tunima.Name} prete — configurez tailles/couleurs puis Generer variantes, puis onglet CBN.";
+                return;
+            }
+
             _simulations = (await SimulationService.ListAsync()).ToList();
             if (_simulations.Count > 0)
             {
-                _selectedSimulationId = ResolveSimulationIdFromUri() ?? _simulations[0].Id;
+                _selectedSimulationId = ResolveSimulationIdFromUri()
+                    ?? _simulations.FirstOrDefault(s => string.Equals(s.Name, SimulationArticleNaming.TunimapulfSimulationName, StringComparison.OrdinalIgnoreCase))?.Id
+                    ?? _simulations[0].Id;
+                ResolveTabFromUri(query);
                 SyncSimulationUri();
                 await LoadSimulationDataAsync();
             }
@@ -817,6 +861,63 @@
         }
 
         return _simulations.Any(s => s.Id == simulationId) ? simulationId : null;
+    }
+
+    private void ResolveTabFromUri(Dictionary<string, Microsoft.Extensions.Primitives.StringValues> query)
+    {
+        if (!query.TryGetValue("tab", out var tabValue))
+        {
+            return;
+        }
+
+        var tab = tabValue.FirstOrDefault()?.Trim().ToLowerInvariant();
+        _activeTab = tab switch
+        {
+            "cbn" => "cbn",
+            "nomenclatures" or "nom" => "nomenclatures",
+            "metier" or "commandes" or "importees" or "calcul" => "metier",
+            _ => "duplication"
+        };
+
+        if (_activeTab == "metier")
+        {
+            _metierSubTab = tab switch
+            {
+                "commandes" or "lignes" => "commandes",
+                "cbn" or "calcul" => "cbn",
+                _ => "importees"
+            };
+        }
+    }
+
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+        if (tab == "metier" && string.IsNullOrWhiteSpace(_metierSubTab))
+        {
+            _metierSubTab = "importees";
+        }
+
+        SyncSimulationUri();
+    }
+
+    private async Task EnsureTunimapulfAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var tunima = await SimulationService.EnsureTunimapulfSimulationAsync();
+            _simulations = (await SimulationService.ListAsync()).ToList();
+            _selectedSimulationId = tunima.Id;
+            _seedArticleName = "TUNIMAPULF";
+            _templateArticleId = _articles.FirstOrDefault(a => a.Code == "TUNIMAPULF_BASE")?.Id ?? 0;
+            _activeTab = "duplication";
+            SyncSimulationUri();
+            await LoadSimulationDataAsync();
+            _templateArticleId = _articles.FirstOrDefault(a => a.IsTemplate && a.Code == "TUNIMAPULF_BASE")?.Id
+                ?? _articles.FirstOrDefault(a => a.IsTemplate)?.Id
+                ?? 0;
+            _message = "TUNIMAPULF SIM recree — stocks synchronises. Selectionnez tailles/couleurs puis Generer variantes.";
+        });
     }
 
     private void SyncSimulationUri()
@@ -893,7 +994,9 @@
                 ? $"Article {result.ArticleCode} deja present — nomenclature editable ci-dessous."
                 : SimulationArticleNaming.IsPantalonDemoSeed(_seedArticleName)
                     ? $"Demo {result.ArticleCode} chargee (BOM, gamme, substitutions, params)."
-                    : $"Template {result.ArticleCode} cree — ajoutez la nomenclature ci-dessous.";
+                    : SimulationArticleNaming.IsTunimapulfSeed(_seedArticleName)
+                        ? $"TUNIMAPULF {result.ArticleCode} charge (BOM, gamme, stocks sync)."
+                        : $"Template {result.ArticleCode} cree — ajoutez la nomenclature ci-dessous.";
             _activeTab = "duplication";
         });
     }
@@ -1522,9 +1625,22 @@
 
     private void OpenCbnForArticle(SimulationArticleDto article)
     {
+        // Lien Duplication → CBN : conserve SimulationId + ArticleId, préremplit l'onglet CBN.
         _cbnArticleId = article.Id;
+        _orderNumber = string.IsNullOrWhiteSpace(_orderNumber) || _orderNumber.StartsWith("CMD-", StringComparison.OrdinalIgnoreCase)
+            ? $"CMD-{article.Code}"
+            : _orderNumber;
+        if (string.IsNullOrWhiteSpace(_customerName))
+        {
+            _customerName = "Client simulation";
+        }
+
+        _cbnResult = null;
+        _selectedRunId = 0;
+        _resultTab = "bom";
         _activeTab = "cbn";
-        _message = $"CBN preselectionne : {article.Code}";
+        _message = $"CBN préselectionné : {article.Code} (simulation #{_selectedSimulationId}). Ajustez qty/date puis lancez le calcul.";
+        Navigation.NavigateTo($"/simulation-mrp?simulationId={_selectedSimulationId}&tab=cbn", replace: true);
     }
 
     private async Task SaveParamAsync(int articleId)

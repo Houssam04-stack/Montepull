@@ -56,6 +56,7 @@ def main() -> None:
     seed_formula = ROOT_DIR / "database" / "seed" / "008_formula_configurator.sql"
     sim_schema = ROOT_DIR / "database" / "sim_cbn_schema.sql"
     aps_schema = ROOT_DIR / "database" / "aps_schema.sql"
+    montepull_schema = ROOT_DIR / "database" / "montepull_import_schema.sql"
 
     for script_path in (
         schema_path,
@@ -70,6 +71,7 @@ def main() -> None:
         seed_formula,
         sim_schema,
         aps_schema,
+        montepull_schema,
     ):
         if not script_path.exists():
             raise FileNotFoundError(f"Script SQL introuvable : {script_path}")
@@ -88,11 +90,13 @@ def main() -> None:
         run_sqlcmd(seed_formula, DEFAULT_DATABASE)
         run_sqlcmd(sim_schema, DEFAULT_DATABASE)
         run_sqlcmd(aps_schema, DEFAULT_DATABASE)
+        run_sqlcmd(montepull_schema, DEFAULT_DATABASE)
     else:
         print("Mode migration : les donnees existantes sont conservees.")
         run_sqlcmd(migrate_path)
         run_sqlcmd(seed_formula, DEFAULT_DATABASE)
         run_sqlcmd(aps_schema, DEFAULT_DATABASE)
+        run_sqlcmd(montepull_schema, DEFAULT_DATABASE)
         # Schema sim_* : recree seulement si absent (script drop+create — a eviter hors --reset)
         # L'app cree les tables a la volee via EnsureSchemaAsync.
 

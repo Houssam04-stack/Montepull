@@ -7,7 +7,7 @@
 <PageTitle>Paramètres</PageTitle>
 
 <PageHeader Title="Paramètres"
-            Description="Formules de besoin, coefficients, pertes nomenclature et règles CBN — par famille produit." />
+            Description="Formules de besoin, coefficients taille/couleur, pertes nomenclature, règles CBN et pegging — par famille produit." />
 
 <SectionTabs Tabs="@_paramTabs" ActiveHref="@ActiveParamHref" AriaLabel="Sections paramètres" />
 
@@ -310,21 +310,184 @@ else
     </section>
     }
 
+    @if (ShowConsommation)
+    {
+    <section class="card">
+        <h3>Coefficients de consommation</h3>
+        <p class="hint">Taille et couleur — utilises par la simulation et le CBN production pour la famille selectionnee.</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Attribut</th>
+                    <th>Valeur</th>
+                    <th class="num">Coefficient</th>
+                    <th>Statut</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _consumptionCoeffs)
+                {
+                    <tr>
+                        <td>@row.AttributeLabel</td>
+                        <td>@row.OptionLabel</td>
+                        <td class="num">
+                            <input type="number" step="0.01" min="0.01" class="form-control input-num"
+                                   @bind="_consumptionEdits[row.Id]" />
+                        </td>
+                        <td>@DisplayLabels.OptionStatus(row.Status)</td>
+                        <td>
+                            <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveConsumptionCoefficientAsync(row.Id)" disabled="@_isBusy">OK</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+    }
+
+    @if (ShowTemps)
+    {
+    <section class="card">
+        <h3>Coefficients de temps (gammes)</h3>
+        <p class="hint">Impact sur les temps de gamme lors de la generation de variantes.</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Attribut</th>
+                    <th>Valeur</th>
+                    <th class="num">Coefficient</th>
+                    <th>Statut</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _timeCoeffs)
+                {
+                    <tr>
+                        <td>@row.AttributeLabel</td>
+                        <td>@row.OptionLabel</td>
+                        <td class="num">
+                            <input type="number" step="0.01" min="0.01" class="form-control input-num"
+                                   @bind="_timeEdits[row.Id]" />
+                        </td>
+                        <td>@DisplayLabels.OptionStatus(row.Status)</td>
+                        <td>
+                            <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveTimeCoefficientAsync(row.Id)" disabled="@_isBusy">OK</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+    }
+
+    @if (ShowGeneral)
+    {
+    <section class="card">
+        <h3>Tailles et couleurs</h3>
+        <p class="hint">Options disponibles en simulation. Les coefficients associes se modifient dans les onglets consommation et temps.</p>
+
+        <h4>Tailles</h4>
+        <table>
+            <thead>
+                <tr><th>Valeur</th><th>Code</th><th>Statut</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var option in _sizeOptions)
+                {
+                    <tr>
+                        <td>@option.DisplayValue</td>
+                        <td>@option.TechnicalCode</td>
+                        <td>@DisplayLabels.OptionStatus(option.Status)</td>
+                        <td>
+                            <button type="button" class="btn-secondary btn-sm"
+                                    @onclick="() => ToggleAttributeOptionAsync(option)" disabled="@_isBusy">
+                                @(option.Status == "VALIDATED" ? "Bloquer" : "Valider")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="inline-form mt-3">
+            <input class="form-control" placeholder="Nouvelle taille" @bind="_newSizeValue" @bind:event="oninput" />
+            <button type="button" class="btn-primary btn-sm" @onclick="AddSizeOptionAsync" disabled="@_isBusy">Ajouter taille</button>
+        </div>
+
+        <h4 class="mt-4">Couleurs</h4>
+        <table>
+            <thead>
+                <tr><th>Valeur</th><th>Code</th><th>Statut</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var option in _colorOptions)
+                {
+                    <tr>
+                        <td>@option.DisplayValue</td>
+                        <td>@option.TechnicalCode</td>
+                        <td>@DisplayLabels.OptionStatus(option.Status)</td>
+                        <td>
+                            <button type="button" class="btn-secondary btn-sm"
+                                    @onclick="() => ToggleAttributeOptionAsync(option)" disabled="@_isBusy">
+                                @(option.Status == "VALIDATED" ? "Bloquer" : "Valider")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="inline-form mt-3">
+            <input class="form-control" placeholder="Nouvelle couleur" @bind="_newColorValue" @bind:event="oninput" />
+            <button type="button" class="btn-primary btn-sm" @onclick="AddColorOptionAsync" disabled="@_isBusy">Ajouter couleur</button>
+        </div>
+    </section>
+    }
+
     @if (ShowCbn)
     {
     <section class="card">
-        <h3>Paramètres CBN</h3>
+        <h3>Règles CBN</h3>
+        <p class="hint">Parametres globaux du calcul des besoins nets et bruts (formule perte, statuts BOM acceptes, recalcul automatique).</p>
         <div class="stack">
-            <h4>Regles CBN globales</h4>
             <table>
                 <thead>
-                    <tr><th>Parametre</th><th>Valeur</th><th></th></tr>
+                    <tr><th>Parametre</th><th>Description</th><th>Valeur</th><th></th></tr>
                 </thead>
                 <tbody>
-                    @foreach (var param in _mvpParameters)
+                    @foreach (var param in CbnParameters)
                     {
                         <tr>
                             <td>@param.Label</td>
+                            <td class="subtle">@(param.Description ?? "—")</td>
+                            <td><input class="form-control" @bind="_cbnEdits[param.Code]" /></td>
+                            <td>
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveCbnParamAsync(param.Code)" disabled="@_isBusy">OK</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    }
+
+    @if (ShowPegging)
+    {
+    <section class="card">
+        <h3>Règles Pegging</h3>
+        <p class="hint">Parametres de couverture OV / OF / OA / stock et profondeur de cascade BOM.</p>
+        <div class="stack">
+            <table>
+                <thead>
+                    <tr><th>Parametre</th><th>Description</th><th>Valeur</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var param in PeggingParameters)
+                    {
+                        <tr>
+                            <td>@param.Label</td>
+                            <td class="subtle">@(param.Description ?? "—")</td>
                             <td><input class="form-control" @bind="_cbnEdits[param.Code]" /></td>
                             <td>
                                 <button type="button" class="btn-secondary btn-sm" @onclick="() => SaveCbnParamAsync(param.Code)" disabled="@_isBusy">OK</button>
@@ -344,25 +507,35 @@ else
     private static readonly SectionTabItem[] _paramTabs =
     [
         new("Formules", "/parametres"),
-        new("Coefficients", "/parametres/coefficients"),
+        new("Arguments", "/parametres/coefficients"),
+        new("Coeff. consommation", "/parametres/consommation"),
+        new("Coeff. temps", "/parametres/temps"),
+        new("Tailles / couleurs", "/parametres/general"),
         new("Pertes", "/parametres/pertes"),
-        new("Paramètres CBN", "/parametres/cbn"),
-        new("Général", "/parametres/general")
+        new("Règles CBN", "/parametres/cbn"),
+        new("Règles Pegging", "/parametres/pegging")
     ];
 
     private string EffectiveTab => string.IsNullOrWhiteSpace(Tab) ? "formules" : Tab.ToLowerInvariant();
     private string ActiveParamHref => EffectiveTab switch
     {
         "coefficients" => "/parametres/coefficients",
+        "consommation" => "/parametres/consommation",
+        "temps" => "/parametres/temps",
         "pertes" => "/parametres/pertes",
         "cbn" => "/parametres/cbn",
+        "pegging" => "/parametres/pegging",
         "general" => "/parametres/general",
         _ => "/parametres"
     };
     private bool ShowFormulas => EffectiveTab is "formules";
     private bool ShowCoefficients => EffectiveTab is "coefficients";
+    private bool ShowConsommation => EffectiveTab is "consommation";
+    private bool ShowTemps => EffectiveTab is "temps";
+    private bool ShowGeneral => EffectiveTab is "general";
     private bool ShowPertes => EffectiveTab is "pertes";
     private bool ShowCbn => EffectiveTab is "cbn";
+    private bool ShowPegging => EffectiveTab is "pegging";
 
     private static readonly string[] _operators = ["+", "-", "*", "/"];
 
@@ -380,8 +553,14 @@ else
     private List<string> _formulaTokens = [];
     private List<BomLossRateItem> _lossRates = [];
     private List<MvpParameterItem> _mvpParameters = [];
+    private List<CoefficientItem> _consumptionCoeffs = [];
+    private List<CoefficientItem> _timeCoeffs = [];
+    private List<AttributeOptionAdminItem> _sizeOptions = [];
+    private List<AttributeOptionAdminItem> _colorOptions = [];
 
     private readonly Dictionary<int, double> _coefficientEdits = [];
+    private readonly Dictionary<int, double> _consumptionEdits = [];
+    private readonly Dictionary<int, double> _timeEdits = [];
     private readonly Dictionary<int, string> _argumentLabelEdits = [];
     private readonly Dictionary<string, string> _newValueInputs = [];
     private readonly Dictionary<int, double> _lossEdits = [];
@@ -389,6 +568,8 @@ else
 
     private string _newArgumentCode = string.Empty;
     private string _newArgumentLabel = string.Empty;
+    private string _newSizeValue = string.Empty;
+    private string _newColorValue = string.Empty;
 
     private int _previewLineId;
     private double _previewBaseQuantity = 0.5;
@@ -409,6 +590,7 @@ else
 
             await LoadConfiguratorAsync();
             await LoadAdvancedSettingsAsync();
+            await LoadAttributeOptionsAsync();
             InitializePreviewDefaults();
         }
         catch (Exception ex)
@@ -468,6 +650,7 @@ else
     {
         await LoadConfiguratorAsync();
         await LoadAdvancedSettingsAsync();
+        await LoadAttributeOptionsAsync();
         InitializePreviewDefaults();
     }
 
@@ -618,10 +801,25 @@ else
     {
         _lossRates = (await ParameterService.GetBomLossRatesAsync(_selectedFamilyCode)).ToList();
         _mvpParameters = (await ParameterService.GetMvpParametersAsync()).ToList();
+        _consumptionCoeffs = (await ParameterService.GetConsumptionCoefficientsAsync(_selectedFamilyCode)).ToList();
+        _timeCoeffs = (await ParameterService.GetTimeCoefficientsAsync(_selectedFamilyCode)).ToList();
+
         _lossEdits.Clear();
         foreach (var row in _lossRates)
         {
             _lossEdits[row.LineId] = row.LossRate;
+        }
+
+        _consumptionEdits.Clear();
+        foreach (var row in _consumptionCoeffs)
+        {
+            _consumptionEdits[row.Id] = row.Coefficient;
+        }
+
+        _timeEdits.Clear();
+        foreach (var row in _timeCoeffs)
+        {
+            _timeEdits[row.Id] = row.Coefficient;
         }
 
         _cbnEdits.Clear();
@@ -630,6 +828,18 @@ else
             _cbnEdits[param.Code] = param.Value;
         }
     }
+
+    private async Task LoadAttributeOptionsAsync()
+    {
+        _sizeOptions = (await ParameterService.GetAttributeOptionsAsync("SIZE")).ToList();
+        _colorOptions = (await ParameterService.GetAttributeOptionsAsync("COLOR")).ToList();
+    }
+
+    private IEnumerable<MvpParameterItem> CbnParameters =>
+        _mvpParameters.Where(p => string.Equals(p.GroupCode, "CBN", StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<MvpParameterItem> PeggingParameters =>
+        _mvpParameters.Where(p => string.Equals(p.GroupCode, "PEGGING", StringComparison.OrdinalIgnoreCase));
 
     private void AddToken(string token)
     {
@@ -798,6 +1008,67 @@ else
         {
             await ParameterService.UpdateBomLossRateAsync(new UpdateLossRateRequest(lineId, _lossEdits[lineId]));
             _message = "Taux de perte enregistre.";
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task SaveConsumptionCoefficientAsync(int coefficientId)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.UpdateConsumptionCoefficientAsync(
+                new UpdateCoefficientRequest(coefficientId, _consumptionEdits[coefficientId]));
+            _message = "Coefficient de consommation enregistre.";
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task SaveTimeCoefficientAsync(int coefficientId)
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.UpdateTimeCoefficientAsync(
+                new UpdateCoefficientRequest(coefficientId, _timeEdits[coefficientId]));
+            _message = "Coefficient de temps enregistre.";
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task AddSizeOptionAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.CreateAttributeOptionAsync(
+                new CreateParameterAttributeOptionRequest("SIZE", _newSizeValue));
+            _newSizeValue = string.Empty;
+            _message = "Taille ajoutee.";
+            await LoadAttributeOptionsAsync();
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task AddColorOptionAsync()
+    {
+        await RunActionAsync(async () =>
+        {
+            await ParameterService.CreateAttributeOptionAsync(
+                new CreateParameterAttributeOptionRequest("COLOR", _newColorValue));
+            _newColorValue = string.Empty;
+            _message = "Couleur ajoutee.";
+            await LoadAttributeOptionsAsync();
+            await LoadAdvancedSettingsAsync();
+        });
+    }
+
+    private async Task ToggleAttributeOptionAsync(AttributeOptionAdminItem option)
+    {
+        await RunActionAsync(async () =>
+        {
+            var newStatus = option.Status == "VALIDATED" ? "BLOCKED" : "VALIDATED";
+            await ParameterService.UpdateAttributeOptionStatusAsync(
+                new UpdateParameterAttributeOptionStatusRequest(option.Id, newStatus));
+            _message = $"{option.DisplayValue} : {newStatus}.";
+            await LoadAttributeOptionsAsync();
             await LoadAdvancedSettingsAsync();
         });
     }

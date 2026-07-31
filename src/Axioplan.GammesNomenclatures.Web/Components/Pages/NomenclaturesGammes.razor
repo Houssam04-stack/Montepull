@@ -1,9 +1,382 @@
 @page "/nomenclatures-gammes"
-@inject NavigationManager Nav
+@rendermode InteractiveServer
+@inject ArticleService ArticleService
+
+<PageTitle>Nomenclatures et gammes</PageTitle>
+
+<PageHeader Title="Nomenclatures et gammes"
+            Description="Sélectionnez un produit fini, consultez sa nomenclature et ajoutez ou modifiez les composants (couleur, taille, quantité, unité)." />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <p>Chargement...</p>
+}
+else
+{
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+
+    <section class="card">
+        <h3>Produit fini</h3>
+        <p class="hint">Articles de type produit fini issus de l’onglet Articles.</p>
+        <div class="form-grid">
+            <div class="info-span-2">
+                <label for="fgSearch">Rechercher un produit fini</label>
+                <input id="fgSearch"
+                       class="form-control"
+                       placeholder="Code ou libellé..."
+                       @bind="_fgSearch"
+                       @bind:event="oninput" />
+            </div>
+            <div class="info-span-2">
+                <label for="fgSelect">Article (@FilteredFinishedGoods.Count / @_finishedGoods.Count)</label>
+                <select id="fgSelect" class="form-control" value="@_selectedArticleId" @onchange="OnFinishedGoodChangedAsync">
+                    <option value="0">— Choisir un produit fini —</option>
+                    @foreach (var article in FilteredFinishedGoods.Take(200))
+                    {
+                        <option value="@article.Id">@article.Code — @article.Label</option>
+                    }
+                </select>
+                @if (FilteredFinishedGoods.Count > 200)
+                {
+                    <p class="hint">Affichage limité à 200 résultats — affinez la recherche.</p>
+                }
+            </div>
+        </div>
+    </section>
+
+    @if (_editor is not null)
+    {
+        <section class="card mt-3">
+            <div class="row-actions" style="justify-content:space-between;width:100%">
+                <h3 style="margin:0">Nomenclature — @_editor.ArticleCode</h3>
+                <span class="hint">@(_editor.BomCode is null ? "Aucune BOM encore — la première ligne en créera une." : $"BOM {_editor.BomCode}")</span>
+            </div>
+            <p class="hint">@_editor.ArticleLabel</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Composant</th>
+                        <th>Couleur</th>
+                        <th>Taille</th>
+                        <th>Quantité</th>
+                        <th>Unité</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in _editor.Lines)
+                    {
+                        <tr>
+                            <td>@line.LineNo</td>
+                            <td>@line.ComponentCode @(string.IsNullOrWhiteSpace(line.ComponentLabel) ? "" : $"— {line.ComponentLabel}")</td>
+                            <td>@(line.ColorCode ?? "—")</td>
+                            <td>@(line.SizeCode ?? "—")</td>
+                            <td>@line.Quantity.ToString("0.####")</td>
+                            <td>@DisplayLabels.Unit(line.Unit)</td>
+                            <td class="row-actions">
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => BeginEdit(line)" disabled="@_isBusy">Modifier</button>
+                                <button type="button" class="btn-secondary btn-sm" @onclick="() => DeleteLineAsync(line.Id)" disabled="@_isBusy">Supprimer</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_editor.Lines.Count == 0)
+            {
+                <p class="hint">Aucun composant pour cet article.</p>
+            }
+        </section>
+
+        <section class="card mt-3">
+            <h3>@(_editingLineId is null ? "Ajouter un composant" : $"Modifier la ligne #{_editingLineId}")</h3>
+            <div class="form-grid">
+                <div class="info-span-2">
+                    <label for="compSearch">Rechercher un composant</label>
+                    <input id="compSearch"
+                           class="form-control"
+                           placeholder="Code ou libellé..."
+                           @bind="_componentSearch"
+                           @bind:event="oninput" />
+                </div>
+                <div class="info-span-2">
+                    <label for="compSelect">Composant</label>
+                    <select id="compSelect" class="form-control" @bind="_formComponentId">
+                        <option value="0">— Choisir —</option>
+                        @foreach (var article in FilteredComponents.Take(200))
+                        {
+                            <option value="@article.Id">@article.Code — @article.Label (@DisplayLabels.ArticleType(article.ArticleType))</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="colorSelect">Couleur</label>
+                    <select id="colorSelect" class="form-control" @bind="_formColorOptionId">
+                        <option value="0">— Aucune —</option>
+                        @foreach (var opt in _colorOptions)
+                        {
+                            <option value="@opt.Id">@opt.DisplayValue (@opt.TechnicalCode)</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="sizeSelect">Taille</label>
+                    <select id="sizeSelect" class="form-control" @bind="_formSizeOptionId">
+                        <option value="0">— Aucune —</option>
+                        @foreach (var opt in _sizeOptions)
+                        {
+                            <option value="@opt.Id">@opt.DisplayValue (@opt.TechnicalCode)</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="qtyInput">Quantité</label>
+                    <input id="qtyInput" type="number" step="any" min="0" class="form-control" @bind="_formQuantity" />
+                </div>
+                <div>
+                    <label for="unitSelect">Unité</label>
+                    <select id="unitSelect" class="form-control" @bind="_formUnit">
+                        @foreach (var unit in UnitChoices)
+                        {
+                            <option value="@unit">@DisplayLabels.Unit(unit)</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="row-actions mt-3">
+                <button type="button" class="btn-primary" @onclick="SaveLineAsync" disabled="@_isBusy">
+                    @(_editingLineId is null ? "Ajouter" : "Enregistrer")
+                </button>
+                @if (_editingLineId is not null)
+                {
+                    <button type="button" class="btn-secondary" @onclick="ResetForm" disabled="@_isBusy">Annuler</button>
+                }
+            </div>
+        </section>
+    }
+}
 
 @code {
-    protected override void OnInitialized()
+    private static readonly string[] UnitChoices = ["PIECE", "PCS", "M", "KG", "TO_CONFIRM"];
+
+    private bool _isLoading = true;
+    private bool _isBusy;
+    private bool _isError;
+    private string? _loadError;
+    private string? _message;
+
+    private List<ArticleListItem> _allArticles = [];
+    private List<ArticleListItem> _finishedGoods = [];
+    private List<AttributeOptionItem> _sizeOptions = [];
+    private List<AttributeOptionItem> _colorOptions = [];
+
+    private string _fgSearch = "";
+    private string _componentSearch = "";
+    private int _selectedArticleId;
+    private ArticleBomEditorDto? _editor;
+
+    private int? _editingLineId;
+    private int _formComponentId;
+    private int _formSizeOptionId;
+    private int _formColorOptionId;
+    private double _formQuantity = 1;
+    private string _formUnit = "PIECE";
+
+    private List<ArticleListItem> FilteredFinishedGoods =>
+        FilterArticles(_finishedGoods, _fgSearch).ToList();
+
+    private List<ArticleListItem> FilteredComponents =>
+        FilterArticles(
+            _allArticles.Where(a => a.Id != _selectedArticleId),
+            _componentSearch).ToList();
+
+    protected override async Task OnInitializedAsync()
     {
-        Nav.NavigateTo("/articles/bom", replace: true);
+        try
+        {
+            _allArticles = (await ArticleService.GetArticlesAsync()).ToList();
+            _finishedGoods = _allArticles
+                .Where(a => string.Equals(a.ArticleType, "FINISHED_GOOD", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Code)
+                .ToList();
+
+            var sizes = await ArticleService.GetAttributeOptionsAsync("SIZE");
+            var colors = await ArticleService.GetAttributeOptionsAsync("COLOR");
+            _sizeOptions = sizes.Where(IsUsableOption).OrderBy(o => o.DisplayValue).ToList();
+            _colorOptions = colors.Where(IsUsableOption).OrderBy(o => o.DisplayValue).ToList();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OnFinishedGoodChangedAsync(ChangeEventArgs e)
+    {
+        _message = null;
+        if (!int.TryParse(e.Value?.ToString(), out var articleId) || articleId <= 0)
+        {
+            _selectedArticleId = 0;
+            _editor = null;
+            ResetForm();
+            return;
+        }
+
+        _selectedArticleId = articleId;
+        await LoadBomAsync();
+    }
+
+    private async Task LoadBomAsync()
+    {
+        if (_selectedArticleId <= 0)
+        {
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            _editor = await ArticleService.GetBomForArticleAsync(_selectedArticleId);
+            ResetForm();
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+            _editor = null;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private void BeginEdit(ArticleBomLineDto line)
+    {
+        _message = null;
+        _editingLineId = line.Id;
+        _formComponentId = line.ComponentArticleId;
+        _formSizeOptionId = line.SizeOptionId ?? 0;
+        _formColorOptionId = line.ColorOptionId ?? 0;
+        _formQuantity = line.Quantity;
+        _formUnit = string.IsNullOrWhiteSpace(line.Unit) ? "PIECE" : line.Unit;
+        _componentSearch = line.ComponentCode;
+    }
+
+    private void ResetForm()
+    {
+        _editingLineId = null;
+        _formComponentId = 0;
+        _formSizeOptionId = 0;
+        _formColorOptionId = 0;
+        _formQuantity = 1;
+        _formUnit = "PIECE";
+        _componentSearch = "";
+    }
+
+    private async Task SaveLineAsync()
+    {
+        if (_selectedArticleId <= 0)
+        {
+            return;
+        }
+
+        if (_formComponentId <= 0)
+        {
+            _isError = true;
+            _message = "Choisissez un composant.";
+            return;
+        }
+
+        if (_formQuantity < 0)
+        {
+            _isError = true;
+            _message = "La quantité ne peut pas être négative.";
+            return;
+        }
+
+        _isBusy = true;
+        _message = null;
+        try
+        {
+            await ArticleService.UpsertArticleBomLineAsync(new UpsertArticleBomLineRequest(
+                _selectedArticleId,
+                _editingLineId,
+                _formComponentId,
+                _formQuantity,
+                _formUnit,
+                _formSizeOptionId > 0 ? _formSizeOptionId : null,
+                _formColorOptionId > 0 ? _formColorOptionId : null));
+
+            _isError = false;
+            _message = _editingLineId is null ? "Composant ajouté." : "Ligne mise à jour.";
+            _editor = await ArticleService.GetBomForArticleAsync(_selectedArticleId);
+            ResetForm();
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task DeleteLineAsync(int lineId)
+    {
+        _isBusy = true;
+        _message = null;
+        try
+        {
+            await ArticleService.DeleteArticleBomLineAsync(lineId);
+            _isError = false;
+            _message = "Ligne supprimée.";
+            _editor = await ArticleService.GetBomForArticleAsync(_selectedArticleId);
+            if (_editingLineId == lineId)
+            {
+                ResetForm();
+            }
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private static bool IsUsableOption(AttributeOptionItem option) =>
+        !string.Equals(option.Status, "DISABLED", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(option.Status, "ARCHIVED", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<ArticleListItem> FilterArticles(IEnumerable<ArticleListItem> source, string search)
+    {
+        var q = search?.Trim() ?? "";
+        var filtered = string.IsNullOrWhiteSpace(q)
+            ? source
+            : source.Where(a =>
+                a.Code.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || a.Label.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || a.FamilyCode.Contains(q, StringComparison.OrdinalIgnoreCase));
+
+        return filtered.OrderBy(a => a.Code);
     }
 }

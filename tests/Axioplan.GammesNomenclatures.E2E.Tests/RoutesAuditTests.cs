@@ -10,10 +10,12 @@ public class RoutesAuditTests : PageTest
     public static IEnumerable<string> AllRoutes =>
     [
         "/accueil", "/charges-capacites", "/charges-capacites/charges", "/charges-capacites/flux",
+        "/consultation", "/pegging/legacy",
         "/cbn/simulation", "/cbn/aps", "/cbn/legacy",
         "/admin/experimental", "/admin/documentation", "/nomenclatures-gammes",
         "/imports/bom", "/imports/autres",
-        "/parametres/coefficients", "/parametres/pertes", "/parametres/cbn", "/parametres/general",
+        "/parametres/coefficients", "/parametres/consommation", "/parametres/temps",
+        "/parametres/pertes", "/parametres/cbn", "/parametres/pegging", "/parametres/general",
         "/aps/planification", "/aps/resultats",
         "/mvp0", "/mvp0/campagnes", "/mvp0/imports", "/mvp0/validation", "/mvp0/anomalies",
         "/mvp0/bypass", "/mvp0/fiabilite", "/mvp0/backtest", "/mvp0/gate", "/mvp0/rapport",

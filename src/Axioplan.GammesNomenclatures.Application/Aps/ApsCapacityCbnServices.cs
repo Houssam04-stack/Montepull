@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Axioplan.GammesNomenclatures.Application.Abstractions;
 using Axioplan.GammesNomenclatures.Application.Models;
+using Axioplan.GammesNomenclatures.Application.MontepullImport;
 using Axioplan.GammesNomenclatures.Domain.Aps.Capacity;
 using Axioplan.GammesNomenclatures.Domain.Aps.Compiler;
 using Axioplan.GammesNomenclatures.Domain.Aps.Journal;
@@ -23,12 +24,17 @@ public static class ApsCapacityCbnExtensions
 public sealed class ApsCapacityService(
     IApsCapacityRepository capacityRepository,
     IApsJournalRepository journalRepository,
-    ApsCapacityEvaluator capacityEvaluator)
+    ApsCapacityEvaluator capacityEvaluator,
+    MontepullImport.PlanningDatasetProvider dataset)
 {
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         await capacityRepository.EnsureSchemaAsync(cancellationToken);
         await capacityRepository.SeedDemoAsync(cancellationToken);
+        if (await dataset.IsMontepullRealAsync(cancellationToken))
+        {
+            await dataset.EnsureMontepullCapacityResourcesAsync(cancellationToken);
+        }
     }
 
     public Task<IReadOnlyList<ApsCapacityResourceDto>> ListResourcesAsync(CancellationToken cancellationToken = default)
@@ -211,6 +217,39 @@ public sealed class ApsSegmentCbnService(
         }
 
         return new ApsSegmentCbnRunDto(runId, result, hash, ApsCompilerStatuses.Valid);
+    }
+
+    /// <summary>CBN cascade SEG_C → SEG_B → SEG_A (cahier §7.3).</summary>
+    public async Task<ApsSegmentCascadeRunDto> RunCascadeAsync(
+        ApsSegmentCbnRunRequest baseRequest,
+        CancellationToken cancellationToken = default)
+    {
+        var chain = new (string Segment, string Circuit)[]
+        {
+            (ApsSegments.C, "CIR_EXPED"),
+            (ApsSegments.B, "CIR_REMAIL_INT"),
+            (ApsSegments.A, "CIR_TRICOT_INT")
+        };
+
+        var runs = new List<ApsSegmentCbnRunDto>();
+        long? lastId = null;
+        ApsSegmentCbnResult? lastResult = null;
+
+        foreach (var (segment, circuit) in chain)
+        {
+            var req = baseRequest with
+            {
+                Segment = segment,
+                CircuitChain = circuit,
+                DemandId = $"{baseRequest.DemandId}-{segment}"
+            };
+            var run = await RunAsync(req, cancellationToken);
+            runs.Add(run);
+            lastId = run.RunId ?? lastId;
+            lastResult = run.Result;
+        }
+
+        return new ApsSegmentCascadeRunDto(runs, lastId, lastResult);
     }
 
     private static ApsSegmentDemand ToDemand(ApsSegmentCbnRunRequest request)

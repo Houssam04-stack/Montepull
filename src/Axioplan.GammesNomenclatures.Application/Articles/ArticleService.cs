@@ -89,4 +89,17 @@ public sealed class ArticleService(IArticleRepository repository)
 
     public Task<IReadOnlyList<BomLinkInfo>> GetBomLinksAsync(CancellationToken cancellationToken = default)
         => repository.GetBomLinksAsync(cancellationToken);
+
+    public Task<ArticleBomEditorDto> GetBomForArticleAsync(
+        int finishedGoodArticleId,
+        CancellationToken cancellationToken = default)
+        => repository.GetBomForArticleAsync(finishedGoodArticleId, cancellationToken);
+
+    public Task<ArticleBomLineDto> UpsertArticleBomLineAsync(
+        UpsertArticleBomLineRequest request,
+        CancellationToken cancellationToken = default)
+        => repository.UpsertArticleBomLineAsync(request, cancellationToken);
+
+    public Task DeleteArticleBomLineAsync(int bomLineId, CancellationToken cancellationToken = default)
+        => repository.DeleteArticleBomLineAsync(bomLineId, cancellationToken);
 }

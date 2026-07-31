@@ -1,0 +1,732 @@
+@page "/commandes"
+@page "/commandes/{Section}"
+@page "/commandes/details/{SoCode}"
+@rendermode InteractiveServer
+@using Axioplan.GammesNomenclatures.Application.Commandes
+@using Axioplan.GammesNomenclatures.Application.Models.Commandes
+@inject CommandeService CommandeService
+@inject NavigationManager Nav
+
+<PageTitle>Commandes</PageTitle>
+
+<PageHeader Title="Commandes"
+            Description="Bons de commande type PROMOD — liste, création, détail et historique." />
+
+<CommandeSectionTabs ActiveSection="@EffectiveSection" UnreadCount="@_unreadCount" />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+
+@if (_isLoading)
+{
+    <p>Chargement...</p>
+}
+else
+{
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+
+    @switch (EffectiveSection)
+    {
+        case "list":
+            <section class="card">
+                <div class="row-actions" style="justify-content:space-between;width:100%">
+                    <h3 style="margin:0">Commandes (@FilteredCommandes.Count / @_commandes.Count)</h3>
+                    <a class="btn-primary" href="/commandes/creer" title="Nouvelle commande">+ Nouvelle commande</a>
+                </div>
+                <p class="hint mt-3">Cliquez sur un <strong>SO</strong> pour ouvrir le détail (modifiable). Le numéro SO est auto-incrémenté à la création.</p>
+                <div class="form-grid">
+                    <div class="info-span-2">
+                        <label for="cmdSearch">Rechercher</label>
+                        <input id="cmdSearch" class="form-control" placeholder="SO260001, client, saisie par..."
+                               @bind="_searchText" @bind:event="oninput" />
+                    </div>
+                    <div>
+                        <label for="cmdSort">Tri par date</label>
+                        <select id="cmdSort" class="form-control" @bind="_dateSort">
+                            <option value="recent">Plus récente</option>
+                            <option value="oldest">Plus ancienne</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="cmdDateFrom">Du</label>
+                        <input id="cmdDateFrom" class="form-control" type="date" @bind="_dateFrom" />
+                    </div>
+                    <div>
+                        <label for="cmdDateTo">Au</label>
+                        <input id="cmdDateTo" class="form-control" type="date" @bind="_dateTo" />
+                    </div>
+                    <div style="display:flex;align-items:flex-end">
+                        <button type="button" class="btn-secondary" @onclick="ClearDateFilters">Réinitialiser dates</button>
+                    </div>
+                </div>
+                @if (_dateFrom.HasValue || _dateTo.HasValue)
+                {
+                    <p class="hint mt-3">
+                        Filtre actif :
+                        @(_dateFrom?.ToString("dd/MM/yyyy") ?? "…")
+                        →
+                        @(_dateTo?.ToString("dd/MM/yyyy") ?? "…")
+                    </p>
+                }
+                <table class="mt-3">
+                    <thead>
+                        <tr>
+                            <th>SO</th>
+                            <th>Client</th>
+                            <th>Date de création</th>
+                            <th>Saisie par</th>
+                            <th>Lignes</th>
+                            <th>Statut</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var cmd in FilteredCommandes)
+                        {
+                            <tr class="clickable-row" @onclick="() => OpenDetails(cmd.SoCode)">
+                                <td><strong>@cmd.SoCode</strong></td>
+                                <td>@(cmd.CustomerLabel ?? cmd.CustomerCode ?? "—")</td>
+                                <td>@cmd.CreatedAt.ToLocalTime().ToString("g")</td>
+                                <td>@(cmd.EnteredBy ?? "—")</td>
+                                <td>@cmd.LineCount</td>
+                                <td>@cmd.Status</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (FilteredCommandes.Count == 0)
+                {
+                    <p class="hint mt-3">
+                        @(_commandes.Count == 0
+                            ? "Aucune commande. Cliquez sur + Nouvelle commande."
+                            : "Aucune commande ne correspond aux filtres de date / recherche.")
+                    </p>
+                }
+            </section>
+            break;
+
+        case "creer":
+            <section class="card">
+                <h3>Créer commande</h3>
+                <p class="hint">Le SO sera généré automatiquement (ex. <strong>@_nextSo</strong>). La date de création est renseignée à l'enregistrement.</p>
+                @RenderCommandeForm(isCreate: true)
+                <div class="row-actions mt-3">
+                    <button type="button" class="btn-primary" @onclick="CreateAsync" disabled="@_isBusy">Enregistrer la commande</button>
+                    <a class="btn-secondary" href="/commandes">Annuler</a>
+                </div>
+            </section>
+            break;
+
+        case "details":
+            <section class="card">
+                @if (_edit is null)
+                {
+                    <h3>Détails commande</h3>
+                    <p class="hint">Sélectionnez une commande dans l'onglet <a href="/commandes">Commandes</a>, ou créez-en une nouvelle.</p>
+                    <p class="hint">Tous les champs ci-dessous seront éditables une fois une commande ouverte (comme le PDF YBONSO).</p>
+                    @RenderCommandeForm(isCreate: false, readOnlyEmpty: true)
+                }
+                else
+                {
+                    <div class="row-actions" style="justify-content:space-between;width:100%">
+                        <h3 style="margin:0">Détails — @_edit.SoCode</h3>
+                        <a class="btn-secondary" href="/commandes">← Liste</a>
+                    </div>
+                    <dl class="info-list mt-3">
+                        <div><dt>SO</dt><dd><strong>@_edit.SoCode</strong></dd></div>
+                        <div><dt>Créée le</dt><dd>@_edit.CreatedAt.ToLocalTime().ToString("g")</dd></div>
+                        <div><dt>Modifiée le</dt><dd>@(_edit.ModifiedAt?.ToLocalTime().ToString("g") ?? "—")</dd></div>
+                    </dl>
+                    @RenderCommandeForm(isCreate: false)
+                    <div class="row-actions mt-3">
+                        <button type="button" class="btn-primary" @onclick="SaveDetailsAsync" disabled="@_isBusy">Enregistrer les modifications</button>
+                    </div>
+                }
+            </section>
+            break;
+
+        case "historique":
+            <section class="card">
+                <h3>Historique et Notifications</h3>
+                <p class="hint">Chaque création de commande est enregistrée ici. L'onglet <strong>Tâches</strong> sera rempli plus tard.</p>
+
+                <nav class="section-tabs mt-3" aria-label="Sous-onglets historique">
+                    <button type="button" class="section-tab @(_historySubTab == "notifications" ? "active" : "")"
+                            @onclick='() => _historySubTab = "notifications"'>
+                        Notifications
+                        @if (_unreadCount > 0)
+                        {
+                            <span class="nav-badge">@_unreadCount</span>
+                        }
+                    </button>
+                    <button type="button" class="section-tab @(_historySubTab == "taches" ? "active" : "")"
+                            @onclick='() => _historySubTab = "taches"'>
+                        Tâches
+                    </button>
+                </nav>
+
+                @if (_historySubTab == "taches")
+                {
+                    <p class="hint mt-3">Onglet Tâches — à venir.</p>
+                }
+                else if (_history.Count == 0)
+                {
+                    <p class="hint mt-3">Aucun événement pour le moment.</p>
+                }
+                else
+                {
+                    <table class="mt-3">
+                        <thead>
+                            <tr>
+                                <th>Date de création</th>
+                                <th>SO</th>
+                                <th>Événement</th>
+                                <th>Client</th>
+                                <th>Saisie par</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in _history)
+                            {
+                                <tr>
+                                    <td>@item.CreatedAt.ToLocalTime().ToString("g")</td>
+                                    <td><strong>@item.SoCode</strong></td>
+                                    <td>@DisplayEvent(item.EventType)</td>
+                                    <td>@(item.CustomerCode ?? "—")</td>
+                                    <td>@(item.EnteredBy ?? "—")</td>
+                                    <td>
+                                        <button type="button" class="btn-secondary" @onclick="() => OpenDetails(item.SoCode)">Ouvrir</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+            break;
+    }
+}
+
+@code {
+    [Parameter] public string? Section { get; set; }
+    [Parameter] public string? SoCode { get; set; }
+
+    private bool _isLoading = true;
+    private bool _isBusy;
+    private string? _loadError;
+    private string? _message;
+    private bool _isError;
+    private string _searchText = string.Empty;
+    private string _dateSort = "recent";
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+    private string _nextSo = "SO……";
+    private string _historySubTab = "notifications";
+    private int _unreadCount;
+
+    private List<CommandeListItem> _commandes = [];
+    private List<CommandeHistoryItem> _history = [];
+    private List<(string Code, string Label)> _customers = [];
+    private List<ArticlePickItem> _articleSuggestions = [];
+
+    private CommandeDetailDto? _edit;
+    private EditModel _form = new();
+
+    private string EffectiveSection
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(SoCode))
+            {
+                return "details";
+            }
+
+            var s = (Section ?? "list").Trim().ToLowerInvariant();
+            if (s.StartsWith("so", StringComparison.OrdinalIgnoreCase) && s.Length > 2)
+            {
+                return "details";
+            }
+
+            return s switch
+            {
+                "" or "list" or "commandes" => "list",
+                "creer" or "create" or "nouvelle" => "creer",
+                "details" or "detail" => "details",
+                "historique" or "notifications" or "history" => "historique",
+                _ => "list"
+            };
+        }
+    }
+
+    private List<CommandeListItem> FilteredCommandes
+    {
+        get
+        {
+            IEnumerable<CommandeListItem> query = _commandes;
+
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var terms = _searchText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                query = query.Where(c => terms.All(t =>
+                    c.SoCode.Contains(t, StringComparison.OrdinalIgnoreCase)
+                    || (c.CustomerCode?.Contains(t, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (c.CustomerLabel?.Contains(t, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (c.EnteredBy?.Contains(t, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || c.Status.Contains(t, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            if (_dateFrom.HasValue)
+            {
+                var from = _dateFrom.Value.Date;
+                query = query.Where(c => c.CreatedAt.ToLocalTime().Date >= from);
+            }
+
+            if (_dateTo.HasValue)
+            {
+                var to = _dateTo.Value.Date;
+                query = query.Where(c => c.CreatedAt.ToLocalTime().Date <= to);
+            }
+
+            query = string.Equals(_dateSort, "oldest", StringComparison.OrdinalIgnoreCase)
+                ? query.OrderBy(c => c.CreatedAt).ThenBy(c => c.SoCode)
+                : query.OrderByDescending(c => c.CreatedAt).ThenByDescending(c => c.SoCode);
+
+            return query.ToList();
+        }
+    }
+
+    private void ClearDateFilters()
+    {
+        _dateFrom = null;
+        _dateTo = null;
+        _dateSort = "recent";
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _isLoading = true;
+        _message = null;
+        try
+        {
+            await CommandeService.EnsureSchemaAsync();
+            _commandes = (await CommandeService.GetCommandesAsync()).ToList();
+            _unreadCount = await CommandeService.CountUnreadHistoryAsync();
+            _nextSo = await CommandeService.PeekNextSoCodeAsync();
+
+            try
+            {
+                _customers = (await CommandeService.GetCustomersAsync()).ToList();
+            }
+            catch
+            {
+                _customers = [];
+            }
+
+            if (EffectiveSection == "historique")
+            {
+                _history = (await CommandeService.GetHistoryAsync()).ToList();
+                await CommandeService.MarkHistoryVisitedAsync();
+                _unreadCount = 0;
+            }
+
+            if (EffectiveSection == "creer")
+            {
+                _edit = null;
+                _form = EditModel.Empty();
+                _form.EnteredBy = Environment.UserName;
+                try
+                {
+                    _articleSuggestions = (await CommandeService.SearchArticlesAsync("PE", 30)).ToList();
+                }
+                catch
+                {
+                    _articleSuggestions = [];
+                }
+            }
+            else if (EffectiveSection == "details")
+            {
+                var code = SoCode;
+                if (string.IsNullOrWhiteSpace(code)
+                    && !string.IsNullOrWhiteSpace(Section)
+                    && Section.StartsWith("SO", StringComparison.OrdinalIgnoreCase))
+                {
+                    code = Section;
+                }
+
+                if (!string.IsNullOrWhiteSpace(code))
+                {
+                    _edit = await CommandeService.GetCommandeBySoAsync(code);
+                    if (_edit is null)
+                    {
+                        _message = $"Commande {code} introuvable.";
+                        _isError = true;
+                        _form = EditModel.Empty();
+                    }
+                    else
+                    {
+                        _form = EditModel.FromDetail(_edit);
+                    }
+                }
+                else
+                {
+                    _edit = null;
+                    _form = EditModel.Empty();
+                }
+
+                try
+                {
+                    _articleSuggestions = (await CommandeService.SearchArticlesAsync("PE", 30)).ToList();
+                }
+                catch
+                {
+                    _articleSuggestions = [];
+                }
+            }
+
+            _loadError = null;
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private RenderFragment RenderCommandeForm(bool isCreate, bool readOnlyEmpty = false) => __builder =>
+    {
+        var disabled = readOnlyEmpty;
+        <div class="form-grid mt-3">
+            <div>
+                <label>SO</label>
+                <input class="form-control" value="@(isCreate ? _nextSo : (_edit?.SoCode ?? "—"))" disabled />
+            </div>
+            <div>
+                <label>Client</label>
+                @if (disabled)
+                {
+                    <input class="form-control" disabled />
+                }
+                else
+                {
+                    <input class="form-control" list="customerList" @bind="_form.CustomerCode" placeholder="ex. BONOBO / CL00011" />
+                    <datalist id="customerList">
+                        @foreach (var c in _customers)
+                        {
+                            <option value="@c.Code">@c.Label</option>
+                        }
+                    </datalist>
+                }
+            </div>
+            <div>
+                <label>Saisie par</label>
+                <input class="form-control" @bind="_form.EnteredBy" disabled="@disabled" placeholder="ex. RAMKY" />
+            </div>
+            <div>
+                <label>Date de mise à disposition</label>
+                <input class="form-control" type="date" @bind="_form.AvailabilityDate" disabled="@disabled" />
+            </div>
+            <div>
+                <label>Mode de livraison</label>
+                <input class="form-control" @bind="_form.DeliveryMode" disabled="@disabled" />
+            </div>
+            <div>
+                <label>Statut</label>
+                <select class="form-control" @bind="_form.Status" disabled="@(disabled || isCreate)">
+                    <option value="DRAFT">DRAFT</option>
+                    <option value="OPEN">OPEN</option>
+                    <option value="CLOSED">CLOSED</option>
+                    <option value="CANCELLED">CANCELLED</option>
+                </select>
+            </div>
+            <div class="info-span-2">
+                <label>Adresse de livraison</label>
+                <textarea class="form-control" rows="2" @bind="_form.ShippingAddress" disabled="@disabled" placeholder="ex. Maroc"></textarea>
+            </div>
+            <div class="info-span-2">
+                <label>Adresse de facturation</label>
+                <textarea class="form-control" rows="2" @bind="_form.BillingAddress" disabled="@disabled" placeholder="ex. Maroc"></textarea>
+            </div>
+            <div class="info-span-2">
+                <label>Notes</label>
+                <textarea class="form-control" rows="2" @bind="_form.Notes" disabled="@disabled"></textarea>
+            </div>
+        </div>
+
+        <h4 class="mt-3">Lignes articles (PE…)</h4>
+        <p class="hint">Ajoutez des articles depuis le référentiel (ex. <strong>PE250242</strong>).</p>
+
+        @if (!disabled)
+        {
+            <div class="form-grid">
+                <div class="info-span-2">
+                    <label>Rechercher un article</label>
+                    <input class="form-control" @bind="_form.ArticleSearch" @bind:event="oninput"
+                           @bind:after="SearchArticlesAsync" placeholder="PE250242, TUNIMAPULF..." />
+                </div>
+            </div>
+            @if (_articleSuggestions.Count > 0)
+            {
+                <div class="article-pick-list mt-3">
+                    @foreach (var art in _articleSuggestions.Take(12))
+                    {
+                        <button type="button" class="btn-secondary btn-sm" @onclick="() => AddArticleLine(art)">
+                            + @art.Code — @art.Label
+                        </button>
+                    }
+                </div>
+            }
+        }
+
+        <table class="mt-3">
+            <thead>
+                <tr>
+                    <th>Article (PE)</th>
+                    <th>Modèle / Description</th>
+                    <th>Couleur</th>
+                    <th>Taille</th>
+                    <th class="num">Qté</th>
+                    <th class="num">Prix unit.</th>
+                    <th class="num">Montant</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_form.Lines.Count == 0)
+                {
+                    <tr><td colspan="8" class="hint">Aucune ligne — ajoutez un PE.</td></tr>
+                }
+                else
+                {
+                    @for (var i = 0; i < _form.Lines.Count; i++)
+                    {
+                        var idx = i;
+                        var line = _form.Lines[idx];
+                        <tr @key="line.Key">
+                            <td><strong>@line.ArticleCode</strong></td>
+                            <td>
+                                <input class="form-control" @bind="line.Description" disabled="@disabled" />
+                            </td>
+                            <td>
+                                <input class="form-control" @bind="line.ColorLabel" disabled="@disabled" placeholder="ROUGECLAIR" />
+                            </td>
+                            <td>
+                                <input class="form-control" @bind="line.SizeLabel" disabled="@disabled" placeholder="XS" />
+                            </td>
+                            <td class="num">
+                                <input class="form-control" type="number" step="1" min="0" @bind="line.Quantity" disabled="@disabled" />
+                            </td>
+                            <td class="num">
+                                <input class="form-control" type="number" step="0.01" @bind="line.UnitPrice" disabled="@disabled" />
+                            </td>
+                            <td class="num">@((line.UnitPrice * line.Quantity)?.ToString("N2") ?? "—")</td>
+                            <td>
+                                @if (!disabled)
+                                {
+                                    <button type="button" class="btn-secondary" @onclick="() => RemoveLine(idx)">Retirer</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="6" style="text-align:right"><strong>TOTAL HT</strong></td>
+                    <td class="num"><strong>@_form.TotalHt.ToString("N2")</strong></td>
+                    <td></td>
+                </tr>
+            </tfoot>
+        </table>
+    };
+
+    private void OpenDetails(string soCode)
+        => Nav.NavigateTo($"/commandes/details/{Uri.EscapeDataString(soCode)}");
+
+    private async Task SearchArticlesAsync()
+    {
+        _articleSuggestions = (await CommandeService.SearchArticlesAsync(_form.ArticleSearch, 30)).ToList();
+    }
+
+    private void AddArticleLine(ArticlePickItem art)
+    {
+        if (_form.Lines.Any(l => string.Equals(l.ArticleCode, art.Code, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        _form.Lines.Add(new LineEdit
+        {
+            ArticleId = art.Id,
+            ArticleCode = art.Code,
+            Description = art.Label,
+            Model = art.Label,
+            Quantity = 1,
+            Unit = "PIECE",
+            UnitPrice = null
+        });
+    }
+
+    private void RemoveLine(int index)
+    {
+        if (index >= 0 && index < _form.Lines.Count)
+        {
+            _form.Lines.RemoveAt(index);
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _isBusy = true;
+        _message = null;
+        try
+        {
+            var created = await CommandeService.CreateCommandeAsync(new CreateCommandeRequest(
+                _form.CustomerCode,
+                _form.EnteredBy,
+                _form.ShippingAddress,
+                _form.BillingAddress,
+                _form.DeliveryMode,
+                _form.AvailabilityDate,
+                _form.Notes,
+                _form.ToInputs()));
+            _message = $"Commande {created.SoCode} créée.";
+            _isError = false;
+            Nav.NavigateTo($"/commandes/details/{Uri.EscapeDataString(created.SoCode)}");
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task SaveDetailsAsync()
+    {
+        if (_edit is null)
+        {
+            return;
+        }
+
+        _isBusy = true;
+        _message = null;
+        try
+        {
+            _edit = await CommandeService.UpdateCommandeAsync(new UpdateCommandeRequest(
+                _edit.Id,
+                _form.CustomerCode,
+                _form.EnteredBy,
+                _form.ShippingAddress,
+                _form.BillingAddress,
+                _form.DeliveryMode,
+                _form.AvailabilityDate,
+                _form.Notes,
+                _form.Status,
+                _form.ToInputs()));
+            _form = EditModel.FromDetail(_edit);
+            _message = $"Commande {_edit.SoCode} mise à jour.";
+            _isError = false;
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private static string DisplayEvent(string eventType) => eventType switch
+    {
+        "CREATED" => "Commande créée",
+        "UPDATED" => "Commande modifiée",
+        _ => eventType
+    };
+
+    private sealed class EditModel
+    {
+        public string? CustomerCode { get; set; }
+        public string? EnteredBy { get; set; }
+        public string? ShippingAddress { get; set; }
+        public string? BillingAddress { get; set; }
+        public string? DeliveryMode { get; set; }
+        public DateTime? AvailabilityDate { get; set; }
+        public string? Notes { get; set; }
+        public string Status { get; set; } = "OPEN";
+        public string ArticleSearch { get; set; } = "PE";
+        public List<LineEdit> Lines { get; set; } = [];
+
+        public double TotalHt => Lines.Sum(l => (l.UnitPrice ?? 0) * l.Quantity);
+
+        public static EditModel Empty() => new();
+
+        public static EditModel FromDetail(CommandeDetailDto d) => new()
+        {
+            CustomerCode = d.CustomerCode,
+            EnteredBy = d.EnteredBy,
+            ShippingAddress = d.ShippingAddress,
+            BillingAddress = d.BillingAddress,
+            DeliveryMode = d.DeliveryMode,
+            AvailabilityDate = d.AvailabilityDate,
+            Notes = d.Notes,
+            Status = d.Status,
+            Lines = d.Lines.Select(l => new LineEdit
+            {
+                ArticleId = l.ArticleId,
+                ArticleCode = l.ArticleCode,
+                Model = l.Model,
+                Description = l.Description ?? l.ArticleLabel,
+                SupplierRef = l.SupplierRef,
+                ColorCode = l.ColorCode,
+                ColorLabel = l.ColorLabel,
+                SizeLabel = l.SizeLabel,
+                Quantity = l.Quantity,
+                Unit = l.Unit,
+                UnitPrice = l.UnitPrice
+            }).ToList()
+        };
+
+        public IReadOnlyList<CommandeLineInput> ToInputs()
+            => Lines.Select(l => new CommandeLineInput(
+                l.ArticleId,
+                l.ArticleCode,
+                l.Model,
+                l.Description,
+                l.SupplierRef,
+                l.ColorCode,
+                l.ColorLabel,
+                l.SizeLabel,
+                l.Quantity,
+                l.Unit,
+                l.UnitPrice)).ToList();
+    }
+
+    private sealed class LineEdit
+    {
+        public Guid Key { get; } = Guid.NewGuid();
+        public int? ArticleId { get; set; }
+        public string ArticleCode { get; set; } = "";
+        public string? Model { get; set; }
+        public string? Description { get; set; }
+        public string? SupplierRef { get; set; }
+        public string? ColorCode { get; set; }
+        public string? ColorLabel { get; set; }
+        public string? SizeLabel { get; set; }
+        public double Quantity { get; set; } = 1;
+        public string Unit { get; set; } = "PIECE";
+        public double? UnitPrice { get; set; }
+    }
+}

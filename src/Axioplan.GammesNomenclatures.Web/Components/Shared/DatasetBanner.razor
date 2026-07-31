@@ -1,0 +1,33 @@
+@using Axioplan.GammesNomenclatures.Application.MontepullImport
+@inject PlanningDatasetProvider Dataset
+
+<div class="dataset-banner @(_isReal ? "dataset-real" : "dataset-demo")" role="status">
+    Dataset actif : <strong>@_active</strong>
+    @if (_isReal)
+    {
+        <span class="subtle"> — données Montepull importées (pas de seed DEMO)</span>
+    }
+    else
+    {
+        <span class="subtle"> — démonstration / simulation</span>
+    }
+</div>
+
+@code {
+    private string _active = PlanningDatasetCodes.Demo;
+    private bool _isReal;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _active = await Dataset.GetActiveAsync();
+            _isReal = string.Equals(_active, PlanningDatasetCodes.MontepullReal, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            _active = PlanningDatasetCodes.Demo;
+            _isReal = false;
+        }
+    }
+}

@@ -1,66 +1,45 @@
 @page "/cbn/simulation"
 @page "/cbn/aps"
 @rendermode InteractiveServer
+@inject NavigationManager Navigation
 
-<PageTitle>CBN — Calcul des besoins</PageTitle>
+<PageTitle>CBN — Modes</PageTitle>
 
-<PageHeader Title="CBN — Calcul des besoins"
-            Description="Trois contextes métier, un seul point d'entrée. Les moteurs et données restent distincts." />
+<PageHeader Title="CBN — Modes complémentaires"
+            Description="Le parcours principal est le module unifié TUNIMAPULF (Duplication + CBN + Pegging)." />
 
-<SectionTabs Tabs="@_tabs" ActiveHref="@ActiveHref" AriaLabel="Modes CBN" />
+<section class="card">
+        <a class="btn-primary" href="/simulation-mrp?ensure=tunimapulf">Ouvrir CBN unifié (Duplication + Métier)</a>
+        <a class="btn-secondary" href="/simulation-mrp?tab=metier">Onglet Métier</a>
+</section>
 
-@switch (EffectiveMode)
+@if (IsAps)
 {
-    case "simulation":
-        <AlertPanel Variant="info" Title="Simulation et traçabilité">
-            Ouvrez Simulation MRP pour créer une simulation, lancer le CBN et consulter l'historique des runs avec traçabilité détaillée.
-        </AlertPanel>
-        <section class="card">
-            <a class="btn-primary" href="/simulation-mrp">Ouvrir Simulation MRP → onglet CBN</a>
-        </section>
-        break;
-    case "aps":
-        <AlertPanel Variant="warning" Title="Calcul APS avancé">
-            CBN par segments APS — données souvent en mode démonstration.
-        </AlertPanel>
-        <section class="card">
-            <a class="btn-primary" href="/aps/cbn">Ouvrir CBN segments APS</a>
-        </section>
-        break;
-    default:
-        <AlertPanel Variant="success" Title="Calcul métier / données réelles">
-            CBN legacy sur commandes clients et nomenclatures du référentiel principal.
-        </AlertPanel>
-        <section class="card">
-            <a class="btn-primary" href="/cbn">Lancer le calcul métier</a>
-        </section>
-        break;
+    <AlertPanel Variant="warning" Title="CBN APS segments">
+        Moteur APS interne — expérimental.
+    </AlertPanel>
+    <section class="card">
+        <a class="btn-secondary" href="/aps/cbn">Ouvrir CBN segments APS</a>
+    </section>
+}
+else
+{
+    <AlertPanel Variant="info" Title="Simulation MRP">
+        Même module que le CBN unifié — atelier technique.
+    </AlertPanel>
+    <section class="card">
+        <a class="btn-secondary" href="/simulation-mrp?ensure=tunimapulf&amp;tab=duplication">Ouvrir Simulation MRP</a>
+        <a class="btn-secondary" href="/cbn/legacy">CBN métier REAL (legacy)</a>
+    </section>
 }
 
 @code {
-    private static readonly SectionTabItem[] _tabs =
-    [
-        new("Données réelles", "/cbn"),        new("Simulation et traçabilité", "/cbn/simulation"),
-        new("APS avancé", "/cbn/aps")
-    ];
-
-    private string EffectiveMode
+    private bool IsAps
     {
         get
         {
             var path = new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant();
-            if (path.EndsWith("/simulation", StringComparison.Ordinal)) return "simulation";
-            if (path.EndsWith("/aps", StringComparison.Ordinal)) return "aps";
-            return "metier";
+            return path.EndsWith("/aps", StringComparison.Ordinal);
         }
     }
-
-    private string ActiveHref => EffectiveMode switch
-    {
-        "simulation" => "/cbn/simulation",
-        "aps" => "/cbn/aps",
-        _ => "/cbn"
-    };
-
-    [Inject] private NavigationManager Navigation { get; set; } = default!;
 }

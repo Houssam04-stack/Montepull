@@ -253,6 +253,26 @@ public sealed class SqlServerMvp0Repository(Mvp0SchemaBootstrap schema) : IMvp0R
             ('RTG_CYCLE_PLAUSIBILITY','Temps','WARNING','Temps hors plage',1,'TO_CONFIRM'),
             ('BOM_OP_LINK_MISSING','LiaisonBOM-OP','BLOCKING','Liaison BOM-opération absente',1,'TO_CONFIRM');
             """, cancellationToken);
+        // Campagne GO de référence pour démo / E2E (Gate 0→1 pré-validée, famille PULL)
+        await Exec(c, """
+            IF NOT EXISTS (SELECT 1 FROM mvp0_campaigns WHERE code = 'MVP0-SEED-GO')
+            INSERT INTO mvp0_campaigns
+                (id, code, family_code, site_code, period_from, period_to, owner_name, status, data_source, provenance,
+                 created_at, import_version, go_threshold, go_res_threshold, gate_outcome)
+            VALUES
+                ('11111111-1111-1111-1111-111111111101', 'MVP0-SEED-GO', 'PULL', 'SITE-1',
+                 '2026-01-01', '2026-12-31', 'Planificateur seed', 'GO', 'DEMO_SEED', 'REAL',
+                 SYSUTCDATETIME(), 1, 85, 70, 'GO');
+
+            IF NOT EXISTS (SELECT 1 FROM mvp0_campaigns WHERE code = 'MVP0-MONTEPULL-REAL')
+            INSERT INTO mvp0_campaigns
+                (id, code, family_code, site_code, period_from, period_to, owner_name, status, data_source, provenance,
+                 created_at, import_version, go_threshold, go_res_threshold, gate_outcome)
+            VALUES
+                ('11111111-1111-1111-1111-111111111201', 'MVP0-MONTEPULL-REAL', 'PULL_COL_ROND', 'SITE-1',
+                 '2026-01-01', '2026-12-31', 'Montepull', 'GO', 'MONTEPULL_REAL', 'REAL',
+                 SYSUTCDATETIME(), 1, 85, 70, 'GO');
+            """, cancellationToken);
     }
 
     public async Task SaveImportMappingAsync(Guid campaignId, long batchId, string dataType, string mappingJson, CancellationToken cancellationToken = default)
@@ -279,8 +299,9 @@ public sealed class SqlServerMvp0Repository(Mvp0SchemaBootstrap schema) : IMvp0R
 
     public Task<IReadOnlyList<(string SheetName, string Csv)>> ConvertExcelToCsvSheetsAsync(
         byte[] fileContent,
+        string? fileName = null,
         CancellationToken cancellationToken = default)
-        => Task.FromResult(Mvp0ExcelCsvConverter.ToCsvSheets(fileContent));
+        => Task.FromResult(Mvp0ExcelCsvConverter.ToCsvSheets(fileContent, fileName));
 
     public async Task<Mvp0Campaign> CreateCampaignAsync(Mvp0Campaign campaign, CancellationToken cancellationToken = default)
     {

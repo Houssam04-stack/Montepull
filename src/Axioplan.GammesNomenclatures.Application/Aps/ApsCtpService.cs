@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Axioplan.GammesNomenclatures.Application.Abstractions;
 using Axioplan.GammesNomenclatures.Application.Models;
+using Axioplan.GammesNomenclatures.Application.Mvp0;
 using Axioplan.GammesNomenclatures.Domain.Aps.Ctp;
 using Axioplan.GammesNomenclatures.Domain.Aps.Expectations;
 using Axioplan.GammesNomenclatures.Domain.Aps.Journal;
@@ -21,7 +22,8 @@ public static class ApsCtpExtensions
 public sealed class ApsCtpService(
     IApsCtpRepository ctpRepository,
     IApsJournalRepository journalRepository,
-    IApsExpectationRepository expectationRepository)
+    IApsExpectationRepository expectationRepository,
+    Mvp0ApsGateGuard gateGuard)
 {
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
@@ -71,6 +73,15 @@ public sealed class ApsCtpService(
         ApsCtpEvaluateRequest request,
         CancellationToken cancellationToken = default)
     {
+        try
+        {
+            await gateGuard.RequireApprovedCampaignAsync(request.SourceType, cancellationToken: cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (null!, ex.Message);
+        }
+
         await EnsureReadyAsync(cancellationToken);
         var sw = Stopwatch.StartNew();
         var demand = ToDemand(request);

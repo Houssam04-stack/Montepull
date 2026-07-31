@@ -1,0 +1,773 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using Axioplan.GammesNomenclatures.Application.Cbn
+@inject ICbnApplicationService CbnApplication
+@inject SimulationService SimulationService
+@inject NavigationManager Navigation
+
+<DatasetBanner />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_isLoading)
+{
+    <LoadingState Message="Chargement des commandes et familles…" />
+}
+else
+{
+    <div class="tabs mb-3" role="tablist" aria-label="CBN métier">
+        <button type="button"
+                class="tab-btn @(_activeTab == "importees" ? "active" : null)"
+                @onclick='() => _activeTab = "importees"'>
+            Commandes importées
+            @if (_importedOrders.Count > 0)
+            {
+                <span class="subtle"> (@_importedOrders.Count)</span>
+            }
+        </button>
+        <button type="button"
+                class="tab-btn @(_activeTab == "commandes" ? "active" : null)"
+                @onclick='() => _activeTab = "commandes"'>
+            Commandes
+            @if (_importedOrders.Count > 0)
+            {
+                <span class="subtle"> (@_importedOrders.Count)</span>
+            }
+        </button>
+        <button type="button"
+                class="tab-btn @(_activeTab == "cbn" ? "active" : null)"
+                @onclick='() => _activeTab = "cbn"'>
+            Calcul CBN
+        </button>
+    </div>
+
+    @if (_activeTab == "importees")
+    {
+        <section class="card">
+            <h3>Commandes importées</h3>
+            <p class="subtle">
+                Inclut <code>CMD-TUNIMAPULF</code> / article <code>TUNIMAPULF</code> et les commandes Montepull.
+                Cliquez sur <strong>Ouvrir dans CBN</strong> pour calculer.
+            </p>
+
+            @if (_importedOrders.Count == 0)
+            {
+                <div class="alert alert-warning">Aucune commande. Importez via <a href="/imports/montepull">Imports Montepull</a>.</div>
+            }
+            else
+            {
+                <div class="form-grid mb-3">
+                    <div>
+                        <label for="order-filter">Filtrer</label>
+                        <input id="order-filter" class="form-control" @bind="_orderFilter" @bind:event="oninput"
+                               placeholder="N° commande, client, article…" />
+                    </div>
+                </div>
+
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>N° commande</th>
+                            <th>Client</th>
+                            <th>Statut</th>
+                            <th>Date</th>
+                            <th>Source</th>
+                            <th>Batch</th>
+                            <th class="num">Lignes</th>
+                            <th class="num">Qty tot.</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var order in FilteredImportedOrders)
+                        {
+                            var expanded = _expandedOrderIds.Contains(order.Id);
+                            <tr class="@(order.Code == "CMD-TUNIMAPULF" ? "row-highlight" : null)">
+                                <td><code>@order.Code</code></td>
+                                <td>@(order.CustomerCode ?? order.Label ?? "—")</td>
+                                <td>@order.Status</td>
+                                <td>@(order.OrderDate?.ToString("yyyy-MM-dd") ?? "—")</td>
+                                <td>@(order.DataSource ?? "—")</td>
+                                <td>@(order.ImportBatchId?.ToString() ?? "—")</td>
+                                <td class="num">@order.LineCount</td>
+                                <td class="num">@order.TotalQuantity.ToString("F0")</td>
+                                <td class="actions-cell">
+                                    <button type="button" class="btn-secondary btn-sm" @onclick="() => ToggleExpand(order.Id)">
+                                        @(expanded ? "Masquer" : "Détail")
+                                    </button>
+                                    <button type="button" class="btn-primary btn-sm" @onclick="() => OpenInCbnAsync(order)">Ouvrir dans CBN</button>
+                                    <a class="btn-secondary btn-sm" href="/pegging/legacy">Pegging</a>
+                                </td>
+                            </tr>
+                            @if (expanded)
+                            {
+                                <tr class="trace-detail">
+                                    <td colspan="9">
+                                        <div class="order-detail-table-wrap">
+                                            <table class="order-detail-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Ligne</th>
+                                                        <th>Article</th>
+                                                        <th>Désignation</th>
+                                                        <th>Taille</th>
+                                                        <th>Couleur</th>
+                                                        <th class="num">Qté cmd</th>
+                                                        <th class="num">Qté lanc.</th>
+                                                        <th class="num">Qté fab.</th>
+                                                        <th>D. op.</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach (var line in order.Lines)
+                                                    {
+                                                        <tr>
+                                                            <td>@line.LineNo</td>
+                                                            <td>@line.ArticleCode</td>
+                                                            <td class="wrap">@(line.Designation ?? "—")</td>
+                                                            <td>@(line.SizeCode ?? "—")</td>
+                                                            <td>@DisplayLabels.Color(line.ColorCode ?? "—")</td>
+                                                            <td class="num">@line.Quantity.ToString("F0")</td>
+                                                            <td class="num">@line.QtyLaunched.ToString("F0")</td>
+                                                            <td class="num">@line.QtyProduced.ToString("F0")</td>
+                                                            <td>@(line.LastOperation?.ToString() ?? "—")</td>
+                                                        </tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+    }
+    else if (_activeTab == "commandes")
+    {
+        <section class="card">
+            <h3>Commandes (format commandes.xlsx)</h3>
+            <p class="subtle">
+                Vue par commande. Cliquez sur <strong>Détail</strong> pour afficher toutes les lignes (article, quantités, opérations).
+            </p>
+
+            <details class="mb-3" open="@_showCreateForm">
+                <summary class="btn-secondary" style="cursor:pointer;display:inline-block;padding:0.4rem 0.8rem;">
+                    + Nouvelle commande / ligne
+                </summary>
+                <div class="form-grid mt-3">
+                    <div>
+                        <label for="new-order">Commande *</label>
+                        <input id="new-order" class="form-control" @bind="_newOrderCode" placeholder="SO…" />
+                    </div>
+                    <div>
+                        <label for="new-client">Client</label>
+                        <input id="new-client" class="form-control" @bind="_newCustomer" placeholder="CL…" />
+                    </div>
+                    <div>
+                        <label for="new-article">Article *</label>
+                        <input id="new-article" class="form-control" @bind="_newArticle" placeholder="PE…" />
+                    </div>
+                    <div>
+                        <label for="new-desig">Désignation</label>
+                        <input id="new-desig" class="form-control" @bind="_newDesignation" />
+                    </div>
+                    <div>
+                        <label for="new-qty">Qte_Commandee *</label>
+                        <input id="new-qty" type="number" step="any" class="form-control" @bind="_newQtyOrdered" />
+                    </div>
+                    <div>
+                        <label for="new-launched">Qte_Lancee</label>
+                        <input id="new-launched" type="number" step="any" class="form-control" @bind="_newQtyLaunched" />
+                    </div>
+                    <div>
+                        <label for="new-produced">Qte_Fabriquee_Derniere_Operation</label>
+                        <input id="new-produced" type="number" step="any" class="form-control" @bind="_newQtyProduced" />
+                    </div>
+                    <div>
+                        <label for="new-lastop">Derniere_Operation</label>
+                        <input id="new-lastop" type="number" class="form-control" @bind="_newLastOperation" />
+                    </div>
+                    <div>
+                        <label for="new-somme">Somme_Operations</label>
+                        <input id="new-somme" type="number" step="any" class="form-control" @bind="_newSommeOps" />
+                    </div>
+                    <div>
+                        <label for="new-somme70c">Somme_Op_70_Commande</label>
+                        <input id="new-somme70c" type="number" step="any" class="form-control" @bind="_newSomme70c" />
+                    </div>
+                    <div>
+                        <label for="new-somme70a">Somme_Op_70_Article</label>
+                        <input id="new-somme70a" type="number" step="any" class="form-control" @bind="_newSomme70a" />
+                    </div>
+                </div>
+                <div class="button-row mt-3">
+                    <button type="button" class="btn-primary" @onclick="CreateCommandeAsync" disabled="@_isSaving">
+                        @(_isSaving ? "Enregistrement…" : "Enregistrer la ligne")
+                    </button>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_createMessage))
+                {
+                    <div class="alert alert-success mt-2">@_createMessage</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_createError))
+                {
+                    <div class="alert alert-danger mt-2">@_createError</div>
+                }
+            </details>
+
+            <div class="form-grid mb-3">
+                <div>
+                    <label for="line-filter">Filtrer</label>
+                    <input id="line-filter" class="form-control" @bind="_lineFilter" @bind:event="oninput"
+                           placeholder="Commande, client, article…" />
+                </div>
+            </div>
+
+            <div class="preview-scroll">
+                <table class="data-table preview-table">
+                    <thead>
+                        <tr>
+                            <th>Commande</th>
+                            <th>Client</th>
+                            <th>Statut</th>
+                            <th>Date</th>
+                            <th>Source</th>
+                            <th class="num">Lignes</th>
+                            <th class="num">Qty tot.</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var order in FilteredCommandeOrders)
+                        {
+                            var expanded = _expandedOrderIds.Contains(order.Id);
+                            <tr class="@(order.Code == "CMD-TUNIMAPULF" ? "row-highlight" : null)">
+                                <td><code>@order.Code</code></td>
+                                <td>@(order.CustomerCode ?? order.Label ?? "—")</td>
+                                <td>@order.Status</td>
+                                <td>@(order.OrderDate?.ToString("yyyy-MM-dd") ?? "—")</td>
+                                <td>@(order.DataSource ?? "—")</td>
+                                <td class="num">@order.LineCount</td>
+                                <td class="num">@order.TotalQuantity.ToString("F0")</td>
+                                <td class="actions-cell">
+                                    <button type="button" class="btn-secondary btn-sm" @onclick="() => ToggleExpand(order.Id)">
+                                        @(expanded ? "Masquer" : "Détail")
+                                    </button>
+                                    <button type="button" class="btn-primary btn-sm" @onclick="() => OpenInCbnAsync(order)">CBN</button>
+                                </td>
+                            </tr>
+                            @if (expanded)
+                            {
+                                <tr class="trace-detail">
+                                    <td colspan="8">
+                                        <div class="order-detail-table-wrap">
+                                            <table class="order-detail-table">
+                                                <thead>
+                                                    <tr class="order-detail-table__groups">
+                                                        <th colspan="5">Article</th>
+                                                        <th colspan="5">Quantités</th>
+                                                        <th colspan="4">Opérations</th>
+                                                    </tr>
+                                                    <tr>
+                                                        <th>Ligne</th>
+                                                        <th>Article</th>
+                                                        <th>Désignation</th>
+                                                        <th>Taille</th>
+                                                        <th>Couleur</th>
+                                                        <th class="num">Cmd</th>
+                                                        <th class="num">Lancée</th>
+                                                        <th class="num">Fab.</th>
+                                                        <th class="num">R. lancer</th>
+                                                        <th class="num">R. produire</th>
+                                                        <th class="num">Σ op.</th>
+                                                        <th class="num">Σ op. 70 cmd</th>
+                                                        <th class="num">Σ op. 70 art.</th>
+                                                        <th>D. op.</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach (var line in order.Lines)
+                                                    {
+                                                        <tr>
+                                                            <td>@line.LineNo</td>
+                                                            <td>@line.ArticleCode</td>
+                                                            <td class="wrap">@(line.Designation ?? "—")</td>
+                                                            <td>@(line.SizeCode ?? "—")</td>
+                                                            <td>@DisplayLabels.Color(line.ColorCode ?? "—")</td>
+                                                            <td class="num">@line.Quantity.ToString("F0")</td>
+                                                            <td class="num">@line.QtyLaunched.ToString("F0")</td>
+                                                            <td class="num">@line.QtyProduced.ToString("F0")</td>
+                                                            <td class="num">@(line.RemainingToLaunch?.ToString("F0") ?? "—")</td>
+                                                            <td class="num">@(line.RemainingToProduce?.ToString("F0") ?? "—")</td>
+                                                            <td class="num">@(line.SommeOperations?.ToString("F0") ?? "—")</td>
+                                                            <td class="num">@(line.SommeOp70Commande?.ToString("F0") ?? "—")</td>
+                                                            <td class="num">@(line.SommeOp70Article?.ToString("F0") ?? "—")</td>
+                                                            <td>@(line.LastOperation?.ToString() ?? "—")</td>
+                                                        </tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+    else
+    {
+        <section class="card">
+            <h3>Lancer un calcul CBN</h3>
+            @if (!string.IsNullOrWhiteSpace(_selectedOrderCode))
+            {
+                <p class="hint">Commande sélectionnée : <code>@_selectedOrderCode</code></p>
+            }
+
+            <div class="form-grid">
+                <div>
+                    <label for="order">Commande client</label>
+                    <select id="order" class="form-control" @bind="_selectedOrderId" @bind:after="OnOrderChanged">
+                        @foreach (var order in _orders)
+                        {
+                            <option value="@order.Id">@order.Code — @(order.Label ?? order.Code)</option>
+                        }
+                    </select>
+                </div>
+
+                <div>
+                    <label for="family">Famille produit</label>
+                    <select id="family" class="form-control" @bind="_selectedFamilyCode">
+                        @foreach (var family in _families)
+                        {
+                            <option value="@family.Code">@family.Label</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            @if (_orderLines.Count > 0)
+            {
+                <h4>Lignes de commande</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Ligne</th>
+                            <th>Article</th>
+                            <th>Taille</th>
+                            <th>Couleur</th>
+                            <th class="num">Quantite</th>
+                            <th>Ref. externe</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var line in _orderLines)
+                        {
+                            <tr>
+                                <td>@line.LineNo</td>
+                                <td>@line.ArticleCode</td>
+                                <td>@(line.SizeCode ?? "—")</td>
+                                <td>@DisplayLabels.Color(line.ColorCode ?? "—")</td>
+                                <td class="num">@line.Quantity.ToString("F0") @DisplayLabels.Unit(line.Unit)</td>
+                                <td>@(line.ExternalRef ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <button class="btn-primary mt-3" @onclick="RunCbnAsync" disabled="@_isRunning">
+                @(_isRunning ? "Calcul en cours..." : "Calculer les besoins")
+            </button>
+
+            @if (!string.IsNullOrWhiteSpace(_runError))
+            {
+                <div class="alert alert-warning mt-3">@_runError</div>
+            }
+        </section>
+
+        @if (_result is not null)
+        {
+            <section class="card summary-banner">
+                <h3>Resultat CBN #@_result.RunId</h3>
+                <div class="summary-stats">
+                    <div class="stat">
+                        <span class="stat-value">@_result.Requirements.Count</span>
+                        <span class="stat-label">besoins calcules</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">@_result.ComponentTotals.Count</span>
+                        <span class="stat-label">composants</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">@_result.Traces.Count</span>
+                        <span class="stat-label">traces</span>
+                    </div>
+                </div>
+                <p class="hint">
+                    Commande @_result.SalesOrderCode — Famille @_result.ProductFamilyCode — @_result.Status
+                    · <a href="/pegging/legacy">Ouvrir le pegging</a>
+                </p>
+            </section>
+
+            <section class="card">
+                <h3>Nomenclature aplatie</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Niv.</th>
+                            <th>Composant</th>
+                            <th>Classe</th>
+                            <th class="num">Qte / unite</th>
+                            <th class="num">Perte</th>
+                            <th>Comportement</th>
+                            <th>Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in _result.FlattenedBom)
+                        {
+                            <tr>
+                                <td>@row.LineNo</td>
+                                <td>@row.BomLevel</td>
+                                <td>@(string.IsNullOrWhiteSpace(row.ComponentLabel) ? DisplayLabels.Component(row.ComponentCode) : row.ComponentLabel)</td>
+                                <td>@DisplayLabels.CalculationMode(row.CalculationMode)</td>
+                                <td class="num">@row.QuantityPerUnit.ToString("F3") @DisplayLabels.Unit(row.Unit)</td>
+                                <td class="num">@row.LossRate.ToString("P0")</td>
+                                <td>@row.Behavior</td>
+                                <td>@row.SourcePath</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+
+            <section class="card">
+                <h3>Besoins par variante</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Variante</th>
+                            <th>Composant</th>
+                            <th>Classe</th>
+                            <th class="num">Net</th>
+                            <th class="num">Brut</th>
+                            <th>Unite</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in _result.Requirements)
+                        {
+                            <tr>
+                                <td>@row.VariantLabel</td>
+                                <td>@(string.IsNullOrWhiteSpace(row.ComponentLabel) ? DisplayLabels.Component(row.ComponentCode) : row.ComponentLabel)</td>
+                                <td>@DisplayLabels.CalculationMode(row.CalculationMode)</td>
+                                <td class="num">@row.QuantityNet.ToString("F3")</td>
+                                <td class="num">@row.QuantityGross.ToString("F3")</td>
+                                <td>@DisplayLabels.Unit(row.Unit)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    }
+}
+
+@code {
+    /// <summary>Onglet métier initial : importees | commandes | cbn</summary>
+    [Parameter] public string? InitialTab { get; set; }
+
+    private IEnumerable<ImportedSalesOrderDetail> FilteredCommandeOrders
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_lineFilter))
+            {
+                return _importedOrders;
+            }
+
+            var q = _lineFilter.Trim();
+            return _importedOrders.Where(o =>
+                o.Code.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (o.CustomerCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (o.Label?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || o.Lines.Any(l =>
+                    l.ArticleCode.Contains(q, StringComparison.OrdinalIgnoreCase)
+                    || (l.Designation?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)));
+        }
+    }
+    private IReadOnlyList<ImportedSalesOrderDetail> _importedOrders = [];
+    private IReadOnlyList<FamilyListItem> _families = [];
+    private IReadOnlyList<SalesOrderLineItem> _orderLines = [];
+    private readonly HashSet<int> _expandedOrderIds = [];
+
+    private int _selectedOrderId;
+    private string? _selectedOrderCode;
+    private string _selectedFamilyCode = "PULL_COL_ROND";
+    private string _activeTab = "importees";
+    private string _orderFilter = string.Empty;
+    private string _lineFilter = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        if (string.IsNullOrWhiteSpace(InitialTab))
+        {
+            return;
+        }
+
+        var tab = InitialTab.Trim().ToLowerInvariant();
+        _activeTab = tab switch
+        {
+            "cbn" or "calcul" or "metier" => "cbn",
+            "commandes" or "lignes" => "commandes",
+            "importees" or "import" => "importees",
+            _ => _activeTab
+        };
+    }
+
+    private bool _isLoading = true;
+    private bool _isRunning;
+    private bool _isSaving;
+    private bool _showCreateForm = true;
+    private string? _loadError;
+    private string? _runError;
+    private string? _createMessage;
+    private string? _createError;
+    private CbnRunResult? _result;
+
+    private string _newOrderCode = string.Empty;
+    private string _newCustomer = string.Empty;
+    private string _newArticle = string.Empty;
+    private string _newDesignation = string.Empty;
+    private double _newQtyOrdered = 100;
+    private double _newQtyLaunched;
+    private double _newQtyProduced;
+    private int? _newLastOperation;
+    private double? _newSommeOps;
+    private double? _newSomme70c;
+    private double? _newSomme70a;
+
+    private IEnumerable<ImportedSalesOrderDetail> FilteredImportedOrders
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_orderFilter))
+            {
+                return _importedOrders;
+            }
+
+            var q = _orderFilter.Trim();
+            return _importedOrders.Where(o =>
+                o.Code.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (o.CustomerCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (o.Label?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (o.ArticlePreview?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || o.Lines.Any(l => l.ArticleCode.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private IReadOnlyList<SalesOrderListItem> _orders = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            ApplyQueryDefaults();
+            await CbnApplication.EnsureTunimapulfSalesOrderAsync();
+
+            _orders = await CbnApplication.GetRealSalesOrdersAsync();
+            _importedOrders = await CbnApplication.GetImportedSalesOrdersDetailAsync();
+            _families = await SimulationService.GetFamiliesAsync();
+
+            if (_orders.Count == 0 && _importedOrders.Count == 0)
+            {
+                _loadError = "Aucune commande. Importez via /imports/montepull.";
+                return;
+            }
+
+            if (_families.Count == 0)
+            {
+                _loadError = "Aucune famille produit.";
+                return;
+            }
+
+            if (!_families.Any(f => f.Code == _selectedFamilyCode))
+            {
+                _selectedFamilyCode = _families[0].Code;
+            }
+
+            if (_selectedOrderId <= 0 && _orders.Count > 0)
+            {
+                var tunima = _orders.FirstOrDefault(o => o.Code == "CMD-TUNIMAPULF");
+                _selectedOrderId = tunima?.Id ?? _orders[0].Id;
+            }
+            else if (_selectedOrderId > 0 && _orders.All(o => o.Id != _selectedOrderId))
+            {
+                var byCode = _importedOrders.FirstOrDefault(o =>
+                    string.Equals(o.Code, _selectedOrderCode, StringComparison.OrdinalIgnoreCase));
+                if (byCode is not null)
+                {
+                    _selectedOrderId = byCode.Id;
+                }
+                else if (_orders.Count > 0)
+                {
+                    _selectedOrderId = _orders[0].Id;
+                }
+            }
+
+            _selectedOrderCode ??= _orders.FirstOrDefault(o => o.Id == _selectedOrderId)?.Code
+                ?? _importedOrders.FirstOrDefault(o => o.Id == _selectedOrderId)?.Code;
+
+            await LoadOrderLinesAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void ApplyQueryDefaults()
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+
+        if (query.TryGetValue("tab", out var tabValues))
+        {
+            var tab = tabValues.ToString().Trim().ToLowerInvariant();
+            _activeTab = tab switch
+            {
+                "cbn" or "calcul" => "cbn",
+                "commandes" or "lignes" => "commandes",
+                "importees" or "import" => "importees",
+                _ => "importees"
+            };
+        }
+
+        if (query.TryGetValue("order", out var orderValues))
+        {
+            var orderKey = orderValues.ToString().Trim();
+            if (int.TryParse(orderKey, out var orderId))
+            {
+                _selectedOrderId = orderId;
+            }
+            else if (!string.IsNullOrWhiteSpace(orderKey))
+            {
+                _selectedOrderCode = orderKey;
+                _activeTab = "cbn";
+            }
+        }
+    }
+
+    private void ToggleExpand(int orderId)
+    {
+        if (!_expandedOrderIds.Add(orderId))
+        {
+            _expandedOrderIds.Remove(orderId);
+        }
+    }
+
+    private async Task OpenInCbnAsync(ImportedSalesOrderDetail order)
+    {
+        _selectedOrderId = order.Id;
+        _selectedOrderCode = order.Code;
+        _result = null;
+        _runError = null;
+        _activeTab = "cbn";
+        await LoadOrderLinesAsync();
+    }
+
+    private async Task CreateCommandeAsync()
+    {
+        _createError = null;
+        _createMessage = null;
+        _isSaving = true;
+        try
+        {
+            var created = await CbnApplication.UpsertImportedSalesOrderLineAsync(new UpsertImportedSalesOrderLineRequest(
+                _newOrderCode.Trim(),
+                string.IsNullOrWhiteSpace(_newCustomer) ? null : _newCustomer.Trim(),
+                _newArticle.Trim(),
+                string.IsNullOrWhiteSpace(_newDesignation) ? null : _newDesignation.Trim(),
+                _newQtyOrdered,
+                _newQtyLaunched,
+                _newQtyProduced,
+                _newLastOperation,
+                _newSommeOps,
+                _newSomme70c,
+                _newSomme70a));
+
+            _importedOrders = await CbnApplication.GetImportedSalesOrdersDetailAsync();
+            _orders = await CbnApplication.GetRealSalesOrdersAsync();
+            _createMessage = $"Ligne enregistrée : {created.Code} / {_newArticle}";
+            _newArticle = string.Empty;
+            _newDesignation = string.Empty;
+            _newQtyOrdered = 100;
+            _newQtyLaunched = 0;
+            _newQtyProduced = 0;
+            _newLastOperation = null;
+            _newSommeOps = null;
+            _newSomme70c = null;
+            _newSomme70a = null;
+        }
+        catch (Exception ex)
+        {
+            _createError = ex.Message;
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task OnOrderChanged()
+    {
+        _result = null;
+        _selectedOrderCode = _orders.FirstOrDefault(o => o.Id == _selectedOrderId)?.Code
+            ?? _importedOrders.FirstOrDefault(o => o.Id == _selectedOrderId)?.Code;
+        await LoadOrderLinesAsync();
+    }
+
+    private async Task LoadOrderLinesAsync()
+    {
+        if (_selectedOrderId <= 0)
+        {
+            _orderLines = [];
+            return;
+        }
+
+        _orderLines = await CbnApplication.GetRealSalesOrderLinesAsync(_selectedOrderId);
+    }
+
+    private async Task RunCbnAsync()
+    {
+        _runError = null;
+        _isRunning = true;
+        try
+        {
+            var run = await CbnApplication.RunRealAsync(new CbnRunRequest(_selectedOrderId, _selectedFamilyCode));
+            _result = run.Result;
+        }
+        catch (Exception ex)
+        {
+            _runError = ex.Message;
+            _result = null;
+        }
+        finally
+        {
+            _isRunning = false;
+        }
+    }
+
+}

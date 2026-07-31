@@ -1,12 +1,16 @@
-@page "/pegging"
+@page "/pegging/legacy"
 @rendermode InteractiveServer
 @inject PeggingService PeggingService
 @inject ICbnApplicationService CbnApplication
 
-<PageTitle>Pegging</PageTitle>
+<PageTitle>Pegging (legacy REAL)</PageTitle>
 
-<h2>Pegging des besoins</h2>
-<p class="lead">Liens OV / OF / OA / stock vers besoins CBN. Regles d'allocation : A confirmer avec le metier.</p>
+<p class="hint"><a href="/simulation-mrp?ensure=tunimapulf">← Retour Simulation MRP (Duplication + CBN)</a> · <a href="/cbn/legacy">CBN métier</a></p>
+
+<h2>Pegging des besoins (legacy REAL)</h2>
+<p class="lead">Liens OV / OF / OA / stock vers besoins CBN production. Regles d'allocation : A confirmer avec le metier.</p>
+
+<DatasetBanner />
 
 @if (!string.IsNullOrWhiteSpace(_loadError))
 {

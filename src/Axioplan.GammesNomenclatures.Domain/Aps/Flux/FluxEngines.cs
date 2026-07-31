@@ -47,7 +47,12 @@ public sealed record ApsLaunchQuantity(
     DateOnly BucketDate,
     double QtyToLaunch,
     string? FamilyCode = null,
-    string? OrderId = null);
+    string? OrderId = null,
+    /// <summary>
+    /// Article racine de compilation CHARGES (ex. DEMO_PF).
+    /// Distinct de <see cref="ArticleCode"/> quand le lancement porte un composant (ex. FIL-DEMO).
+    /// </summary>
+    string? RootArticleCode = null);
 
 public sealed record ApsLoadBucketResult(
     string ResourceCode,

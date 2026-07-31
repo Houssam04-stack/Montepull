@@ -4,6 +4,7 @@
 @using Axioplan.GammesNomenclatures.Application.Models
 @using Axioplan.GammesNomenclatures.Domain.Mvp0
 @inject Mvp0WorkflowService Workflow
+@inject IJSRuntime Js
 
 <PageTitle>MVP-0 Parcours</PageTitle>
 
@@ -117,8 +118,8 @@ else
     {
         <section class="card">
             <h3>Rapport GO / NO-GO</h3>
-            <button class="btn-secondary" @onclick="PrintReport">Imprimer / PDF</button>
-            <iframe srcdoc="@_state.ReportHtml" style="width:100%;height:480px;border:1px solid #ccc;margin-top:0.5rem"></iframe>
+            <button class="btn-secondary" @onclick="PrintReportAsync" disabled="@_busy">Imprimer / PDF</button>
+            <iframe id="mvp0-report-frame" srcdoc="@_state.ReportHtml" style="width:100%;height:480px;border:1px solid #ccc;margin-top:0.5rem"></iframe>
         </section>
     }
 }
@@ -172,9 +173,16 @@ else
         finally { _busy = false; }
     }
 
-    private void PrintReport()
+    private async Task PrintReportAsync()
     {
-        // browser print via iframe — user uses Ctrl+P
-        _info = "Utilisez Imprimer dans le navigateur sur le rapport (Ctrl+P).";
+        try
+        {
+            await Js.InvokeVoidAsync("axioplan.printElementById", "mvp0-report-frame");
+            _info = "Fenêtre d'impression ouverte — choisissez « Enregistrer au format PDF » si besoin.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Impression impossible : {ex.Message}";
+        }
     }
 }

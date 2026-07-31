@@ -13,11 +13,11 @@ public class NavigationReworkTests : PageTest
         "/articles",
         "/nomenclatures-gammes",
         "/stock",
-        "/parametres",
         "/imports",
         "/mvp0",
-        "/cbn",
-        "/pegging",
+        "/simulation-mrp",
+        "/cbn/legacy",
+        "/consultation",
         "/charges-capacites",
         "/aps/planification",
         "/aps/journal",
@@ -44,20 +44,53 @@ public class NavigationReworkTests : PageTest
     }
 
     [Test]
-    public async Task Unified_cbn_shows_real_calculator()
+    public async Task Unified_cbn_opens_tunimapulf_simulation()
     {
-        await Page.GotoAsync(AuditConfig.BaseUrl + "/cbn", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
-        await Expect(Page.GetByText("Calculer les besoins")).ToBeVisibleAsync();
-        await Expect(Page.Locator("h3", new() { HasText = "Lancer un calcul CBN" })).ToBeVisibleAsync();
+        await Page.GotoAsync(AuditConfig.BaseUrl + "/consultation", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
+        // DEMO → simulation-mrp TUNIMAPULF ; MONTEPULL_REAL → CBN métier (/cbn/legacy)
+        await Page.WaitForURLAsync(url =>
+            url.Contains("simulation-mrp", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("/cbn/legacy", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("/cbn/reel", StringComparison.OrdinalIgnoreCase),
+            new() { Timeout = 60_000 });
+
+        if (Page.Url.Contains("simulation-mrp", StringComparison.OrdinalIgnoreCase))
+        {
+            await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Duplication", Exact = true })).ToBeVisibleAsync();
+            await Expect(Page.Locator("button.tab-btn", new() { HasText = "CBN" })).ToBeVisibleAsync();
+            await Expect(Page.Locator("body")).ToContainTextAsync("TUNIMAPULF");
+        }
+        else
+        {
+            await Expect(Page.Locator("body")).ToContainTextAsync("CBN");
+            await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Commandes importées" })
+                .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Commandes", Exact = true }))
+                .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Calcul CBN" }))
+                .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Calculer les besoins" }))
+                .First).ToBeVisibleAsync();
+        }
     }
 
     [Test]
-    public async Task Cbn_simulation_hub_still_shows_modes()
+    public async Task Menu_shows_unified_cbn_entry()
     {
-        await Page.GotoAsync(AuditConfig.BaseUrl + "/cbn/simulation", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
-        await Expect(Page.Locator(".section-tab", new() { HasText = "Données réelles" })).ToBeVisibleAsync();
-        await Expect(Page.Locator(".section-tab", new() { HasText = "Simulation et traçabilité" })).ToBeVisibleAsync();
-        await Expect(Page.Locator(".section-tab", new() { HasText = "APS avancé" })).ToBeVisibleAsync();
+        await Page.GotoAsync(AuditConfig.BaseUrl + "/accueil", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
+        await Expect(Page.Locator(".sidebar-nav a", new() { HasText = "CBN — Duplication, commandes & calcul" })).ToBeVisibleAsync();
+        await Expect(Page.Locator(".sidebar-nav a", new() { HasText = "Simulation MRP — Duplication & CBN" })).ToHaveCountAsync(0);
+        await Expect(Page.Locator(".sidebar-nav a", new() { HasText = "CBN métier — Commandes & calcul" })).ToHaveCountAsync(0);
+        await Expect(Page.Locator(".sidebar-nav a", new() { HasText = "Paramètres" })).ToHaveCountAsync(0);
+    }
+
+    [Test]
+    public async Task Menu_unified_cbn_opens_simulation_and_metier_tabs()
+    {
+        await Page.GotoAsync(AuditConfig.BaseUrl + "/accueil", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
+        await Page.Locator(".sidebar-nav a", new() { HasText = "CBN — Duplication, commandes & calcul" }).ClickAsync();
+        await Page.WaitForURLAsync(url => url.Contains("simulation-mrp", StringComparison.OrdinalIgnoreCase), new() { Timeout = 60_000 });
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Duplication", Exact = true })
+            .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Recreer TUNIMAPULF" }))
+            .First).ToBeVisibleAsync();
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Métier — Commandes & calcul" })).ToBeVisibleAsync();
     }
 
     [Test]
@@ -81,6 +114,7 @@ public class NavigationReworkTests : PageTest
     {
         var response = await Page.GotoAsync(AuditConfig.BaseUrl + "/cbn/legacy", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
         Assert.That(response!.Status, Is.EqualTo(200));
-        await Expect(Page.GetByText("Calculer les besoins")).ToBeVisibleAsync();
+        await Page.WaitForURLAsync(url => url.Contains("simulation-mrp", StringComparison.OrdinalIgnoreCase), new() { Timeout = 60_000 });
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Métier — Commandes & calcul" })).ToBeVisibleAsync();
     }
 }

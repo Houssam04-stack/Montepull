@@ -18,6 +18,13 @@ public interface ISimulationCbnRepository
 
     Task SeedPantalonDemoAsync(int simulationId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Recree / complete la simulation « TUNIMAPULF SIM » (template, BOM, gamme, tailles/couleurs, sync stocks).
+    /// </summary>
+    Task<SimulationHeaderDto> EnsureTunimapulfSimulationAsync(CancellationToken cancellationToken = default);
+
+    Task SyncStocksIntoSimCbnParametersAsync(int simulationId, CancellationToken cancellationToken = default);
+
     Task<SeedTemplateArticleResult> SeedTemplateArticleAsync(SeedTemplateArticleRequest request, CancellationToken cancellationToken = default);
 
     Task<SimulationArticleDto> CreateSimArticleAsync(CreateSimArticleRequest request, CancellationToken cancellationToken = default);

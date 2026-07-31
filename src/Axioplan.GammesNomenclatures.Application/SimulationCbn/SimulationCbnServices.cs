@@ -41,6 +41,12 @@ public sealed class SimulationOrchestrationService(ISimulationCbnRepository repo
     public Task SeedPantalonDemoAsync(int simulationId, CancellationToken cancellationToken = default)
         => repository.SeedPantalonDemoAsync(simulationId, cancellationToken);
 
+    public Task<SimulationHeaderDto> EnsureTunimapulfSimulationAsync(CancellationToken cancellationToken = default)
+        => repository.EnsureTunimapulfSimulationAsync(cancellationToken);
+
+    public Task SyncStocksIntoSimCbnParametersAsync(int simulationId, CancellationToken cancellationToken = default)
+        => repository.SyncStocksIntoSimCbnParametersAsync(simulationId, cancellationToken);
+
     public Task<SeedTemplateArticleResult> SeedTemplateArticleAsync(SeedTemplateArticleRequest request, CancellationToken cancellationToken = default)
         => repository.SeedTemplateArticleAsync(request, cancellationToken);
 

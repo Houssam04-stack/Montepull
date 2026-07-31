@@ -10,6 +10,7 @@ public static class ImportFieldKeys
 {
     public const string OrderCustomer = "order.customer";
     public const string OrderReference = "order.reference";
+    public const string OrderArticle = "order.article";
     public const string OrderDueDate = "order.due_date";
     public const string OrderGauge = "order.gauge";
     public const string OrderVersion = "order.version";
@@ -76,7 +77,8 @@ public sealed record ImportSheetAnalysis(
     int? SuggestedDataStartRow = null,
     string? StructureFingerprint = null,
     ImportMappingProfile? MatchedProfile = null,
-    IReadOnlyList<BomExtractedPreviewRow>? ExtractedPreviewRows = null);
+    IReadOnlyList<BomExtractedPreviewRow>? ExtractedPreviewRows = null,
+    int? SuggestedSizeHeaderRow = null);
 
 public sealed record WorkbookImportAnalysis(
     string ImportTarget,

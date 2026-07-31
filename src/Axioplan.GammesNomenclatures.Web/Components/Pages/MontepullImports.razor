@@ -1,0 +1,495 @@
+@page "/imports/montepull"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using Axioplan.GammesNomenclatures.Application.MontepullImport
+@using Axioplan.GammesNomenclatures.Infrastructure.Imports
+@using Microsoft.AspNetCore.Components.Forms
+@inject MontepullImportService ImportService
+@inject MontepullDatasetService DatasetService
+@inject IJSRuntime Js
+
+<PageTitle>Imports — Montepull</PageTitle>
+
+<PageHeader Title="Imports Montepull (donnees reelles)"
+            Description="Depot multi-formats (Excel, CSV, Word, PDF, exports Google) : analyse, staging, validation, promotion metier." />
+
+<SectionTabs Tabs="@_importTabs" ActiveHref="/imports/montepull" AriaLabel="Types d'import" />
+
+<section class="card">
+    <h3>Jeu de donnees actif</h3>
+    <div class="form-grid">
+        <div>
+            <label for="dataset-select">Dataset</label>
+            <select id="dataset-select" class="form-control" value="@_activeDataset" @onchange="OnDatasetChangedAsync">
+                <option value="DEMO">DEMO (donnees de demonstration)</option>
+                <option value="MONTEPULL_REAL">MONTEPULL_REAL (donnees reelles importees)</option>
+            </select>
+        </div>
+        <p class="subtle">Dataset configure par defaut (appsettings) : <code>@DatasetService.ConfiguredActive</code></p>
+    </div>
+    <div class="button-row mt-3">
+        <a class="btn-primary" href="/cbn/legacy?tab=commandes">Voir les commandes importees</a>
+        <a class="btn-secondary" href="/simulation-mrp?tab=metier">Module CBN unifié</a>
+        <a class="btn-secondary" href="/simulation-mrp?tab=cbn">Ouvrir le calcul CBN simulation</a>
+    </div>
+</section>
+
+<section class="card">
+    <h3>1. Deposer des fichiers</h3>
+    <p class="subtle">Formats : @UniversalWorkbookLoader.AcceptedExtensionsHint — 50&nbsp;Mo max. Google Docs/Sheets : telechargez en .docx / .xlsx / .csv / .pdf (pas le raccourci .gdoc). Types reconnus : commandes, ListeSuivi, SuiviOperations, DOUBLYGILF, Nomenclature DOULBYGILF.</p>
+    <InputFile OnChange="OnFilesSelectedAsync" multiple accept="@UniversalWorkbookLoader.HtmlAcceptAttribute" />
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+
+    @if (_previews.Count > 0)
+    {
+        <div class="stack">
+            <h4>Apercu des fichiers charges (@_previews.Count)</h4>
+            <table class="data-table preview-table">
+                <thead>
+                    <tr>
+                        <th>Fichier</th>
+                        <th>Type detecte</th>
+                        <th>Feuilles</th>
+                        <th>Lignes estimees</th>
+                        <th>Hash (SHA-256)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var preview in _previews)
+                    {
+                        <tr>
+                            <td>@preview.FileName</td>
+                            <td>@preview.Kind</td>
+                            <td>@string.Join(", ", preview.SheetNames)</td>
+                            <td>@preview.EstimatedRows</td>
+                            <td><code>@preview.FileHash[..16]…</code></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_previews[0].HeaderPreview.Count > 0)
+            {
+                <h4>Apercu entetes — @_previews[0].FileName</h4>
+                <div class="preview-scroll">
+                    <table class="data-table preview-table">
+                        <tbody>
+                            @foreach (var row in _previews[0].HeaderPreview)
+                            {
+                                <tr>
+                                    @foreach (var cell in row)
+                                    {
+                                        <td>@cell</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <button class="btn-primary" @onclick="StageAsync" disabled="@_busy">
+                @(_busy ? "Mise en staging..." : "Mettre en staging")
+            </button>
+        </div>
+    }
+</section>
+
+@if (_currentSummary is not null)
+{
+    <section class="card">
+        <h3>2. Resultat du batch — #@_currentSummary.BatchId (@_currentSummary.Status)</h3>
+        <div class="kpis">
+            <div class="kpi"><span>Lignes lues</span><strong>@_currentSummary.LinesRead</strong></div>
+            <div class="kpi"><span>Valides</span><strong>@_currentSummary.LinesValid</strong></div>
+            <div class="kpi"><span>Avertissements</span><strong>@_currentSummary.LinesWarning</strong></div>
+            <div class="kpi"><span>Rejetees</span><strong>@_currentSummary.LinesRejected</strong></div>
+            <div class="kpi"><span>Commandes</span><strong>@_currentSummary.CommandesDetected</strong></div>
+            <div class="kpi"><span>OF</span><strong>@_currentSummary.OfDetected</strong></div>
+            <div class="kpi"><span>Operations</span><strong>@_currentSummary.OperationsDetected</strong></div>
+            <div class="kpi"><span>Articles</span><strong>@_currentSummary.ArticlesDetected</strong></div>
+            <div class="kpi"><span>Doublons ignores</span><strong>@_currentSummary.DuplicatesDetected</strong></div>
+        </div>
+
+        <div class="button-row">
+            <button class="btn-secondary" @onclick="ValidateAsync" disabled="@_busy">Valider le batch</button>
+            <button class="btn-primary" @onclick="PromoteAsync" disabled="@_busy">Promouvoir (integration metier)</button>
+            <button class="btn-secondary" @onclick="CancelAsync" disabled="@_busy">Annuler le batch</button>
+            <button class="btn-secondary" @onclick="DownloadAnomaliesCsvAsync" disabled="@_busy">Exporter anomalies CSV</button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_actionMessage))
+        {
+            <div class="alert alert-success">@_actionMessage</div>
+        }
+
+        @if (_currentSummary.Anomalies.Count > 0)
+        {
+            <h4>Anomalies (@_currentSummary.Anomalies.Count)</h4>
+            <div class="preview-scroll">
+                <table class="data-table preview-table">
+                    <thead>
+                        <tr>
+                            <th>Severite</th>
+                            <th>Code</th>
+                            <th>Message</th>
+                            <th>Feuille</th>
+                            <th>Ligne</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var anomaly in _currentSummary.Anomalies.Take(200))
+                        {
+                            <tr class="@SeverityClass(anomaly.Severity)">
+                                <td>@anomaly.Severity</td>
+                                <td>@anomaly.Code</td>
+                                <td>@anomaly.Message</td>
+                                <td>@anomaly.SheetName</td>
+                                <td>@anomaly.SourceRowNo</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_currentSummary.Anomalies.Count > 200)
+            {
+                <p class="subtle">Affichage limite aux 200 premieres anomalies — export CSV pour la liste complete.</p>
+            }
+        }
+        else
+        {
+            <p class="subtle">Aucune anomalie detectee pour ce batch.</p>
+        }
+    </section>
+}
+
+<section class="card">
+    <h3>3. Historique des batches</h3>
+    <button class="btn-secondary" @onclick="RefreshBatchesAsync" disabled="@_busy">Actualiser l'historique</button>
+
+    @if (_batchesLoading)
+    {
+        <p class="subtle">Chargement de l'historique…</p>
+    }
+    else if (_batches.Count == 0)
+    {
+        <p class="subtle">Aucun batch d'import Montepull pour le moment.</p>
+    }
+    else
+    {
+        <table class="data-table preview-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Statut</th>
+                    <th>Importe le</th>
+                    <th>Origine</th>
+                    <th>Dataset</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var batch in _batches)
+                {
+                    <tr>
+                        <td>@batch.Id</td>
+                        <td>@batch.Status</td>
+                        <td>@batch.ImportedAt.ToLocalTime().ToString("g")</td>
+                        <td>@batch.Origin</td>
+                        <td>@batch.DatasetCode</td>
+                        <td><button class="btn-secondary" @onclick="() => SelectBatchAsync(batch.Id)" disabled="@_busy">Ouvrir</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private const long MaxFileBytes = 50L * 1024 * 1024;
+
+    private static readonly SectionTabItem[] _importTabs =
+    [
+        new("Commandes", "/imports"),
+        new("Nomenclatures / BOM", "/imports/bom"),
+        new("Montepull (donnees reelles)", "/imports/montepull"),
+        new("Autres imports", "/imports/autres")
+    ];
+
+    private readonly List<(byte[] Content, string FileName)> _pendingFiles = [];
+    private readonly List<MontepullFilePreviewDto> _previews = [];
+    private IReadOnlyList<MontepullBatchListItem> _batches = [];
+    private MontepullImportSummaryDto? _currentSummary;
+    private string _activeDataset = "DEMO";
+    private string? _error;
+    private string? _actionMessage;
+    private bool _busy;
+    private bool _batchesLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await ImportService.EnsureSchemaAsync();
+            _activeDataset = await DatasetService.GetActiveDatasetAsync();
+            await RefreshBatchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _batchesLoading = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        // Recharge apres connexion interactive (garantit l'historique meme si le 1er paint etait vide).
+        try
+        {
+            await RefreshBatchesAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _batchesLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task OnDatasetChangedAsync(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        try
+        {
+            await DatasetService.SetActiveDatasetAsync(value, "ui");
+            _activeDataset = value;
+            _actionMessage = $"Dataset actif : {value}.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs args)
+    {
+        _error = null;
+        _actionMessage = null;
+        _pendingFiles.Clear();
+        _previews.Clear();
+        _currentSummary = null;
+        _busy = true;
+
+        try
+        {
+            foreach (var file in args.GetMultipleFiles(20))
+            {
+                if (file.Size > MaxFileBytes)
+                {
+                    _error = $"Fichier '{file.Name}' trop volumineux (> 50 Mo) — ignore.";
+                    continue;
+                }
+
+                await using var stream = file.OpenReadStream(MaxFileBytes);
+                using var memory = new MemoryStream();
+                await stream.CopyToAsync(memory);
+                var content = memory.ToArray();
+                _pendingFiles.Add((content, file.Name));
+
+                var preview = await ImportService.AnalyzeFileAsync(content, file.Name);
+                _previews.Add(preview);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task StageAsync()
+    {
+        if (_pendingFiles.Count == 0)
+        {
+            _error = "Chargez d'abord au moins un fichier Excel.";
+            return;
+        }
+
+        _error = null;
+        _actionMessage = null;
+        _busy = true;
+
+        try
+        {
+            _currentSummary = await ImportService.StageFilesAsync(_pendingFiles, "ui", "UI");
+            _actionMessage = $"Batch #{_currentSummary.BatchId} mis en staging ({_currentSummary.LinesRead} ligne(s) lue(s)).";
+            await RefreshBatchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ValidateAsync()
+    {
+        if (_currentSummary is null)
+        {
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        try
+        {
+            _currentSummary = await ImportService.ValidateBatchAsync(_currentSummary.BatchId);
+            _actionMessage = _currentSummary.Status == "VALIDATED"
+                ? "Validation reussie : le batch peut etre promu."
+                : "Validation effectuee : des anomalies bloquantes (ERROR) restent a corriger avant promotion.";
+            await RefreshBatchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PromoteAsync()
+    {
+        if (_currentSummary is null)
+        {
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        try
+        {
+            _currentSummary = await ImportService.PromoteBatchAsync(_currentSummary.BatchId);
+            _actionMessage = $"Batch #{_currentSummary.BatchId} promu vers les tables metier (commandes, OF, nomenclatures).";
+            await RefreshBatchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_currentSummary is null)
+        {
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        try
+        {
+            await ImportService.CancelBatchAsync(_currentSummary.BatchId);
+            _actionMessage = $"Batch #{_currentSummary.BatchId} annule (donnees liees desactivees).";
+            _currentSummary = null;
+            await RefreshBatchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DownloadAnomaliesCsvAsync()
+    {
+        if (_currentSummary is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var csv = await ImportService.GetAnomaliesReportCsvAsync(_currentSummary.BatchId);
+            await Js.InvokeVoidAsync("axioplan.downloadText", $"anomalies_batch_{_currentSummary.BatchId}.csv", csv, "text/csv;charset=utf-8");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task RefreshBatchesAsync()
+    {
+        _batchesLoading = true;
+        try
+        {
+            _batches = await ImportService.ListBatchesAsync();
+        }
+        finally
+        {
+            _batchesLoading = false;
+        }
+    }
+
+    private async Task SelectBatchAsync(long batchId)
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            var anomalies = await ImportService.GetAnomaliesAsync(batchId);
+            var batch = _batches.FirstOrDefault(b => b.Id == batchId);
+            _currentSummary = new MontepullImportSummaryDto(
+                batchId,
+                batch?.BatchUid ?? Guid.Empty,
+                batch?.Status ?? "?",
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                anomalies);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string SeverityClass(string severity) => severity switch
+    {
+        "ERROR" => "row-error",
+        "WARNING" => "row-warning",
+        _ => ""
+    };
+}

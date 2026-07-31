@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Axioplan.GammesNomenclatures.Application.Abstractions;
 using Axioplan.GammesNomenclatures.Application.Models;
+using Axioplan.GammesNomenclatures.Application.MontepullImport;
 using Axioplan.GammesNomenclatures.Domain.Aps.Flux;
 using Axioplan.GammesNomenclatures.Domain.Aps.Journal;
+using Axioplan.GammesNomenclatures.Domain.MontepullImport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Axioplan.GammesNomenclatures.Application.Aps;
@@ -20,12 +22,20 @@ public sealed class ApsFluxService(
     IApsFluxRepository fluxRepository,
     IApsCapacityRepository capacityRepository,
     ApsCapacityEvaluator capacityEvaluator,
-    IApsJournalRepository journalRepository)
+    IApsJournalRepository journalRepository,
+    PlanningDatasetProvider dataset)
 {
     public async Task EnsureReadyAsync(CancellationToken cancellationToken = default)
     {
         await fluxRepository.EnsureSchemaAsync(cancellationToken);
         await capacityRepository.EnsureSchemaAsync(cancellationToken);
+        if (await dataset.IsMontepullRealAsync(cancellationToken))
+        {
+            await dataset.EnsureMontepullCapacityResourcesAsync(cancellationToken);
+            await capacityRepository.SeedDemoAsync(cancellationToken);
+            return;
+        }
+
         await fluxRepository.SeedDemoAsync(cancellationToken);
         await capacityRepository.SeedDemoAsync(cancellationToken);
     }
@@ -37,22 +47,37 @@ public sealed class ApsFluxService(
     public Task<IReadOnlyList<ApsLoadRunSummaryDto>> ListLoadRunsAsync(CancellationToken cancellationToken = default)
         => fluxRepository.ListLoadRunsAsync(20, cancellationToken);
 
+    public Task<ApsFluxComputeResultDto?> GetLoadRunAsync(long runId, CancellationToken cancellationToken = default)
+        => fluxRepository.GetLoadRunAsync(runId, cancellationToken);
+
     public async Task<ApsFluxComputeResultDto> ComputeAsync(
         ApsFluxWindowRequest request,
         CancellationToken cancellationToken = default)
     {
         await EnsureReadyAsync(cancellationToken);
+        var isReal = await dataset.IsMontepullRealAsync(cancellationToken);
+        var activeDataset = await dataset.GetActiveAsync(cancellationToken);
         var traces = new List<string>
         {
+            $"Dataset actif : {activeDataset}",
             $"Fenetre {request.From:yyyy-MM-dd} → {request.To:yyyy-MM-dd}",
             request.Publish ? "Mode PUBLIE (journalisation active)." : "Mode calcul temporaire (pas de journal sauf publication)."
         };
 
         var launches = await fluxRepository.ResolveLaunchesFromCbnRunAsync(
             request.SegmentCbnRunId, request.From, request.To, cancellationToken);
-        if (launches.Count == 0)
+        if (launches.Count == 0 && isReal)
         {
-            // Demo launches SIMULES isolaris via resources
+            launches = await dataset.ResolveMontepullLaunchesAsync(request.From, request.To, cancellationToken);
+            traces.Add($"Lancements MONTEPULL_REAL : {launches.Count} (OF/commandes restantes).");
+            if (launches.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "Calcul impossible avec les données réelles disponibles — aucun OF/commande avec quantité restante (PLANNED/RELEASED).");
+            }
+        }
+        else if (launches.Count == 0)
+        {
             launches = BuildDemoLaunches(request.From);
             traces.Add("Aucun run CBN APS — lancements demo SIMULES utilises.");
         }
@@ -70,8 +95,11 @@ public sealed class ApsFluxService(
                 continue;
             }
 
+            var chargesRoot = string.IsNullOrWhiteSpace(launch.RootArticleCode)
+                ? launch.ArticleCode
+                : launch.RootArticleCode!;
             var (valid, hash, loadLines) = await fluxRepository.LoadValidChargesAsync(
-                launch.ArticleCode,
+                chargesRoot,
                 GuessSegment(launch.ResourceCode),
                 GuessCircuit(launch.ResourceCode),
                 cancellationToken);
@@ -84,8 +112,23 @@ public sealed class ApsFluxService(
             }
             else if (!valid || loadLines.Count == 0)
             {
-                throw new InvalidOperationException(
-                    $"CompileInvalideRefuse : artefact CHARGES INVALID/absent pour {launch.ArticleCode}/{launch.ResourceCode}.");
+                if (!isReal)
+                {
+                    throw new InvalidOperationException(
+                        $"CompileInvalideRefuse : artefact CHARGES INVALID/absent pour {chargesRoot}/{launch.ResourceCode} (lancement {launch.ArticleCode}).");
+                }
+
+                const double unitHours = 0.05;
+                _ = MontepullRemainingLoad.RemainingLoadHours(launch.QtyToLaunch, unitHours, "H", false);
+                line = new ApsCompiledLoadLine(
+                    resource.Code,
+                    resource.ResourceType,
+                    unitHours,
+                    0.1,
+                    resource.Unit,
+                    true,
+                    "montepull-estimated");
+                traces.Add($"Charge ESTIMATED pour {launch.ArticleCode}/{resource.Code} (artefact CHARGES absent).");
             }
             else
             {
@@ -105,10 +148,12 @@ public sealed class ApsFluxService(
                 bathMax));
         }
 
-        // EXTERNE demo without internal load
-        var extLaunch = new ApsLaunchQuantity("DEMO_PF", "EXT_ST_REMAIL", request.From, 50);
-        var extLine = new ApsCompiledLoadLine("EXT_ST_REMAIL", ApsResourceAlgebras.External, 0, 0, "NONE", true, "demo-ext");
-        bucketLoads.Add(LoadEngine.ComputeBucket(extLine, extLaunch, ApsResourceAlgebras.External, "NONE"));
+        if (!isReal)
+        {
+            var extLaunch = new ApsLaunchQuantity("DEMO_PF", "EXT_ST_REMAIL", request.From, 50);
+            var extLine = new ApsCompiledLoadLine("EXT_ST_REMAIL", ApsResourceAlgebras.External, 0, 0, "NONE", true, "demo-ext");
+            bucketLoads.Add(LoadEngine.ComputeBucket(extLine, extLaunch, ApsResourceAlgebras.External, "NONE"));
+        }
 
         var saturations = new List<ApsSaturationResult>();
         foreach (var group in bucketLoads.Where(b => b.CapacityType != ApsResourceAlgebras.External)
@@ -117,7 +162,6 @@ public sealed class ApsFluxService(
             var resource = resources.First(r => r.Code.Equals(group.Key, StringComparison.OrdinalIgnoreCase));
             var chargeCum = group.Where(b => b.BucketDate >= request.From && b.BucketDate <= request.To).Sum(b => b.Charge);
 
-            // Cap_cum engageable via moteur capacite
             var capEval = await capacityRepository.GetResourceAsync(resource.Code, cancellationToken);
             double capCum = 0;
             if (capEval is not null)
@@ -136,15 +180,11 @@ public sealed class ApsFluxService(
                 request.Thresholds));
         }
 
-        // Material FIL constraint if shortage from demo stocks
         ApsMaterialConstraint? yarn = null;
         var yarnShortage = launches
             .Where(l => l.ResourceCode.Contains("TRICOT", StringComparison.OrdinalIgnoreCase))
-            .Sum(l => l.QtyToLaunch * 0.2); // TO_CONFIRM ratio
-        // If any saturation exists and yarn shortage signal from buffer FIL-DEMO demo path
-        var yarnBlocking = request.SegmentCbnRunId is null && yarnShortage > 200; // rare
-        // Explicit path: if user window includes forced FIL — check space of FIL shortage via launches > available demo 40
-        if (launches.Any(l => l.QtyToLaunch > 200 && l.ResourceCode.Contains("TRICOT", StringComparison.OrdinalIgnoreCase)))
+            .Sum(l => l.QtyToLaunch * 0.2);
+        if (!isReal && launches.Any(l => l.QtyToLaunch > 200 && l.ResourceCode.Contains("TRICOT", StringComparison.OrdinalIgnoreCase)))
         {
             yarn = new ApsMaterialConstraint("FIL", true, yarnShortage - 40, "ATP fil insuffisant (SIMULE) avant charge machine.");
         }
@@ -163,7 +203,7 @@ public sealed class ApsFluxService(
         var buffer = BufferEngine.ComputeUpstreamBuffer(
             "CC_REMAILLAGE",
             bufferStock,
-            remailCapDay <= 0 ? 6.0 : remailCapDay, // demo fallback TO_CONFIRM
+            remailCapDay <= 0 ? 6.0 : remailCapDay,
             expectedMix.Count == 0 ? null : expectedMix);
 
         var (k, variances, reaction) = await fluxRepository.LoadBufferTargetParamsAsync("CC_REMAILLAGE", cancellationToken);
@@ -180,7 +220,6 @@ public sealed class ApsFluxService(
             .Where(s => s.ResourceCode.Equals("CC_REMAILLAGE", StringComparison.OrdinalIgnoreCase))
             .Select(s => s.ChargeCumulee)
             .FirstOrDefault();
-        var targetHre = bufferTarget.BufferTargetHre ?? buffer.BufferHre; // if TO_CONFIRM use actual for demo formula visibility
         var rope = RopeEngine.RecommendKnittingLaunch(
             plannedRemail,
             bufferTarget.BufferTargetHre ?? buffer.BufferHre,
@@ -216,7 +255,6 @@ public sealed class ApsFluxService(
             return dto;
         }
 
-        // Publication : journal + persist
         await journalRepository.EnsureSchemaAsync(cancellationToken);
         await fluxRepository.SavePublishedRunAsync(dto, cancellationToken);
         await fluxRepository.PersistBottleneckHistoryAsync(bottleneck, moved, cancellationToken);
@@ -249,7 +287,6 @@ public sealed class ApsFluxService(
                      s.Status is ApsSaturationStatuses.Depassement or ApsSaturationStatuses.Saturee
                      && s.Rho > s.RhoTarget))
         {
-            // options epuisees : demo si palier ST non activable (horizon court)
             var horizonDays = request.To.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
             if (horizonDays < 45)
             {
@@ -278,9 +315,9 @@ public sealed class ApsFluxService(
     private static IReadOnlyList<ApsLaunchQuantity> BuildDemoLaunches(DateOnly from)
         =>
         [
-            new("DEMO_PF", "CC_REMAILLAGE", from, 100),
-            new("DEMO_PF", "CC_TRICOTAGE", from, 80),
-            new("DEMO_PF", "CC_TRAITEMENT", from, 120)
+            new("DEMO_PF", "CC_REMAILLAGE", from, 100, RootArticleCode: "DEMO_PF"),
+            new("DEMO_PF", "CC_TRICOTAGE", from, 80, RootArticleCode: "DEMO_PF"),
+            new("DEMO_PF", "CC_TRAITEMENT", from, 120, RootArticleCode: "DEMO_PF")
         ];
 
     private static string GuessSegment(string resourceCode)

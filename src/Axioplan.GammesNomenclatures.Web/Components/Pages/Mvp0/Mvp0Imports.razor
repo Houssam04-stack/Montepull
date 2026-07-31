@@ -5,14 +5,15 @@
 @using Axioplan.GammesNomenclatures.Application.Mvp0
 @using Axioplan.GammesNomenclatures.Application.Models
 @using Axioplan.GammesNomenclatures.Domain.Mvp0
+@using Axioplan.GammesNomenclatures.Infrastructure.Imports
 @inject Mvp0WorkflowService Workflow
 @inject NavigationManager Nav
 
 <PageTitle>MVP-0 Imports</PageTitle>
 
 <div class="alert" style="background:#fff7ed;border:1px solid #fdba74;padding:0.6rem;margin-bottom:1rem">
-    Assistant d’import MVP-0 (CSV ou Excel .xlsx/.xls). Aucune ligne n’est ignorée silencieusement.
-    Les colonnes non mappées sont signalées. Excel : 1ʳᵉ feuille convertie en CSV interne versionné.
+    Assistant d’import MVP-0 multi-formats (@UniversalWorkbookLoader.AcceptedExtensionsHint).
+    Aucune ligne n’est ignorée silencieusement. Google Docs/Sheets : exportez en .docx / .xlsx / .csv / .pdf.
 </div>
 
 <section class="card">
@@ -39,7 +40,7 @@
 </section>
 
 <section class="card">
-    <h3>Assistant CSV</h3>
+    <h3>Assistant import</h3>
     <div class="form-grid">
         <div>
             <label>Type de données</label>
@@ -54,13 +55,13 @@
             </select>
         </div>
         <div>
-            <label>Fichier CSV ou Excel</label>
-            <InputFile OnChange="OnFile" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+            <label>Fichier</label>
+            <InputFile OnChange="OnFile" accept="@UniversalWorkbookLoader.HtmlAcceptAttribute" />
         </div>
         @if (_excelSheets.Count > 1)
         {
             <div>
-                <label>Feuille Excel</label>
+                <label>Feuille / tableau</label>
                 <select class="form-control" @bind="_selectedSheet">
                     @foreach (var s in _excelSheets)
                     {
@@ -172,34 +173,25 @@
         var file = e.File;
         _fileName = file.Name;
         await using var stream = file.OpenReadStream(maxAllowedSize: 8 * 1024 * 1024);
-        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
-        if (ext is ".xlsx" or ".xls")
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        try
         {
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-            try
+            var sheets = await Workflow.ConvertExcelAsync(ms.ToArray(), file.Name);
+            foreach (var (name, csv) in sheets)
             {
-                var sheets = await Workflow.ConvertExcelAsync(ms.ToArray());
-                foreach (var (name, csv) in sheets)
-                {
-                    _excelBySheet[name] = csv;
-                    _excelSheets.Add(name);
-                }
+                _excelBySheet[name] = csv;
+                _excelSheets.Add(name);
+            }
 
-                _selectedSheet = _excelSheets[0];
-                _csv = _excelBySheet[_selectedSheet];
-                _info = $"Excel lu : {_excelSheets.Count} feuille(s). Sélectionnez le type de données puis prévisualisez.";
-            }
-            catch (Exception ex)
-            {
-                _error = ex.Message;
-                _csv = null;
-            }
+            _selectedSheet = _excelSheets[0];
+            _csv = _excelBySheet[_selectedSheet];
+            _info = $"Fichier lu : {_excelSheets.Count} feuille(s)/tableau(x). Sélectionnez le type de données puis prévisualisez.";
         }
-        else
+        catch (Exception ex)
         {
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            _csv = await reader.ReadToEndAsync();
+            _error = ex.Message;
+            _csv = null;
         }
     }
 

@@ -53,8 +53,14 @@
         [
             new("Articles", "/articles", ["/articles"]),
             new("Nomenclatures et gammes", "/nomenclatures-gammes", ["/nomenclatures-gammes", "/articles/bom"]),
-            new("Stock", "/stock", ["/stock"]),
-            new("Paramètres", "/parametres", ["/parametres"])
+            new("Stock", "/stock", ["/stock"])
+        ]),
+        new("Commandes",
+        [
+            new("Commandes", "/commandes", ["/commandes"]),
+            new("Créer commande", "/commandes/creer", ["/commandes/creer"]),
+            new("Détails commande", "/commandes/details", ["/commandes/details"]),
+            new("Historique et Notifications", "/commandes/historique", ["/commandes/historique"])
         ]),
         new("Préparation des données",
         [
@@ -63,8 +69,7 @@
         ]),
         new("Calculs et planification",
         [
-            new("CBN — Calcul des besoins", "/cbn", ["/cbn"]),
-            new("Pegging", "/pegging", ["/pegging"]),
+            new("CBN — Duplication, commandes & calcul", "/simulation-mrp?ensure=tunimapulf", ["/simulation-mrp", "/cbn", "/consultation", "/pegging"]),
             new("Charges et capacités", "/charges-capacites", ["/charges-capacites", "/aps/capacites", "/aps/charges", "/aps/flux"]),
             new("Planification APS", "/aps/planification", ["/aps/planification", "/aps/resultats"])
         ]),
@@ -119,6 +124,21 @@
 
     private bool IsActive(NavItem item)
     {
+        // Exact match for commandes sub-routes so "Commandes" does not stay active on /commandes/creer.
+        if (item.Href.StartsWith("/commandes", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(item.Href, "/commandes", StringComparison.OrdinalIgnoreCase))
+            {
+                return Path is "/commandes" || (Path.StartsWith("/commandes/", StringComparison.Ordinal)
+                    && !Path.StartsWith("/commandes/creer", StringComparison.Ordinal)
+                    && !Path.StartsWith("/commandes/details", StringComparison.Ordinal)
+                    && !Path.StartsWith("/commandes/historique", StringComparison.Ordinal));
+            }
+
+            return Path == item.Href.TrimEnd('/').ToLowerInvariant()
+                || Path.StartsWith(item.Href.TrimEnd('/').ToLowerInvariant() + "/", StringComparison.Ordinal);
+        }
+
         foreach (var prefix in item.MatchPrefixes)
         {
             var p = prefix.TrimEnd('/').ToLowerInvariant();

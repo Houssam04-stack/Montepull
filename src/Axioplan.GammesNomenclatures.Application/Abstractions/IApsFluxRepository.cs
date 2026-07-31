@@ -54,4 +54,6 @@ public interface IApsFluxRepository
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ApsLoadRunSummaryDto>> ListLoadRunsAsync(int take = 20, CancellationToken cancellationToken = default);
+
+    Task<ApsFluxComputeResultDto?> GetLoadRunAsync(long runId, CancellationToken cancellationToken = default);
 }

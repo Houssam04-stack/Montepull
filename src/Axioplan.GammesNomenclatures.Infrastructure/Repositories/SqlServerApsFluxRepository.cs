@@ -214,7 +214,12 @@ public sealed class SqlServerApsFluxRepository(
                 bucketDate = to;
             }
 
-            launches.Add(new ApsLaunchQuantity(line.ArticleCode, resource, bucketDate, line.QtyToLaunch));
+            launches.Add(new ApsLaunchQuantity(
+                line.ArticleCode,
+                resource,
+                bucketDate,
+                line.QtyToLaunch,
+                RootArticleCode: run.FinishedArticleCode));
             index++;
         }
 
@@ -564,6 +569,22 @@ public sealed class SqlServerApsFluxRepository(
         }
 
         return list;
+    }
+
+    public async Task<ApsFluxComputeResultDto?> GetLoadRunAsync(long runId, CancellationToken cancellationToken = default)
+    {
+        await schema.EnsureAsync(cancellationToken);
+        await using var connection = schema.OpenConnection();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT result_json FROM aps_load_runs WHERE id = @id";
+        cmd.Parameters.AddWithValue("@id", runId);
+        var json = (string?)await cmd.ExecuteScalarAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<ApsFluxComputeResultDto>(json);
     }
 
     private static async Task Exec(SqlConnection connection, string sql, CancellationToken ct)

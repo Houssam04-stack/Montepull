@@ -1,0 +1,28 @@
+<nav class="section-tabs" aria-label="Sections commandes">
+    @foreach (var tab in Tabs)
+    {
+        <a class="section-tab @(IsActive(tab.Section) ? "active" : null)" href="@tab.Href">
+            @tab.Label
+            @if (tab.Section == "historique" && UnreadCount > 0)
+            {
+                <span class="nav-badge" title="Commandes non lues">@UnreadCount</span>
+            }
+        </a>
+    }
+</nav>
+
+@code {
+    [Parameter] public string ActiveSection { get; set; } = "list";
+    [Parameter] public int UnreadCount { get; set; }
+
+    private static readonly (string Label, string Section, string Href)[] Tabs =
+    [
+        ("Commandes", "list", "/commandes"),
+        ("Créer commande", "creer", "/commandes/creer"),
+        ("Détails commande", "details", "/commandes/details"),
+        ("Historique et Notifications", "historique", "/commandes/historique")
+    ];
+
+    private bool IsActive(string section)
+        => string.Equals(ActiveSection, section, StringComparison.OrdinalIgnoreCase);
+}

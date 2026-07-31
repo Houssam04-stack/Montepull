@@ -7,7 +7,6 @@ using Axioplan.GammesNomenclatures.Application.Models;
 using Axioplan.GammesNomenclatures.Infrastructure.Data;
 using Axioplan.GammesNomenclatures.Infrastructure.Imports;
 using Axioplan.GammesNomenclatures.Infrastructure.Logging;
-using ExcelDataReader;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 
@@ -40,7 +39,7 @@ public sealed class SqlServerImportRepository(
         string fileName,
         CancellationToken cancellationToken = default)
     {
-        var workbook = LoadWorkbook(fileContent);
+        var workbook = LoadWorkbook(fileContent, fileName);
         var warnings = new List<string>();
         var sheets = workbook
             .Select(sheet => AnalyzeOrderSheet(sheet, warnings))
@@ -59,7 +58,7 @@ public sealed class SqlServerImportRepository(
         string fileName,
         CancellationToken cancellationToken = default)
     {
-        var workbook = LoadWorkbook(fileContent);
+        var workbook = LoadWorkbook(fileContent, fileName);
         var warnings = new List<string>();
         var profiles = await LoadMappingProfilesAsync(ImportTargets.Bom, cancellationToken);
         var sheets = workbook
@@ -84,7 +83,7 @@ public sealed class SqlServerImportRepository(
         BomImportRequest request,
         CancellationToken cancellationToken = default)
     {
-        var workbook = LoadWorkbook(fileContent);
+        var workbook = LoadWorkbook(fileContent, request.FileName);
         var sheet = workbook.FirstOrDefault(s => TextComparer.Equals(s.Name, request.SheetName))
             ?? throw new InvalidOperationException($"Feuille introuvable : {request.SheetName}");
 
@@ -98,7 +97,7 @@ public sealed class SqlServerImportRepository(
         OrderImportRequest request,
         CancellationToken cancellationToken = default)
     {
-        var workbook = LoadWorkbook(fileContent);
+        var workbook = LoadWorkbook(fileContent, request.FileName);
         var sheet = workbook.FirstOrDefault(s => TextComparer.Equals(s.Name, request.SheetName))
             ?? throw new InvalidOperationException($"Feuille introuvable : {request.SheetName}");
 
@@ -115,12 +114,16 @@ public sealed class SqlServerImportRepository(
 
         var mappedCustomer = GetMappedValue(request.Mappings, ImportFieldKeys.OrderCustomer, metadataValues);
         var mappedReference = GetMappedValue(request.Mappings, ImportFieldKeys.OrderReference, metadataValues);
+        var mappedArticle = GetMappedValue(request.Mappings, ImportFieldKeys.OrderArticle, metadataValues);
         var mappedDueDate = GetMappedValue(request.Mappings, ImportFieldKeys.OrderDueDate, metadataValues);
         var mappedGauge = GetMappedValue(request.Mappings, ImportFieldKeys.OrderGauge, metadataValues);
         var mappedVersion = GetMappedValue(request.Mappings, ImportFieldKeys.OrderVersion, metadataValues);
 
         var customerCode = NormalizeCodeOrFallback(mappedCustomer, "CLIENT_IMPORT");
         var orderCode = NormalizeCodeOrFallback(mappedReference, Path.GetFileNameWithoutExtension(request.FileName).ToUpperInvariant());
+        var articleCode = NormalizeCodeOrFallback(
+            string.IsNullOrWhiteSpace(mappedArticle) ? mappedReference : mappedArticle,
+            orderCode);
         var colorValue = string.IsNullOrWhiteSpace(mappedVersion) ? null : mappedVersion.Trim();
         var orderDate = TryParseDate(mappedDueDate);
 
@@ -145,13 +148,13 @@ public sealed class SqlServerImportRepository(
                 ?? throw new InvalidOperationException($"Famille produit introuvable : {request.ProductFamilyCode}");
 
             var customerId = await EnsureCustomerAsync(connection, transaction, customerCode, mappedCustomer, cancellationToken);
-            var articleLabel = string.Join(" - ", new[] { orderCode, mappedGauge, colorValue }.Where(v => !string.IsNullOrWhiteSpace(v)));
+            var articleLabel = string.Join(" - ", new[] { articleCode, mappedGauge, colorValue }.Where(v => !string.IsNullOrWhiteSpace(v)));
             var articleId = await EnsureArticleAsync(
                 connection,
                 transaction,
                 familyInfo.ArticleFamilyId,
-                orderCode,
-                string.IsNullOrWhiteSpace(articleLabel) ? orderCode : articleLabel,
+                articleCode,
+                string.IsNullOrWhiteSpace(articleLabel) ? articleCode : articleLabel,
                 "FINISHED_GOOD",
                 "PIECE",
                 customerId,
@@ -172,7 +175,7 @@ public sealed class SqlServerImportRepository(
                 transaction,
                 orderCode,
                 customerCode,
-                articleLabel,
+                $"{orderCode} / {articleLabel}",
                 orderDate,
                 cancellationToken);
 
@@ -243,7 +246,7 @@ public sealed class SqlServerImportRepository(
                 request.SheetName,
                 request.ProductFamilyCode,
                 importedRows,
-                $"Commande {orderCode} importee avec {importedRows} lignes taille.",
+                $"Commande {orderCode} / article {articleCode} importée avec {importedRows} lignes taille.",
                 warnings);
         }
         catch
@@ -258,7 +261,7 @@ public sealed class SqlServerImportRepository(
         BomImportRequest request,
         CancellationToken cancellationToken = default)
     {
-        var workbook = LoadWorkbook(fileContent);
+        var workbook = LoadWorkbook(fileContent, request.FileName);
         var sheet = workbook.FirstOrDefault(s => TextComparer.Equals(s.Name, request.SheetName))
             ?? throw new InvalidOperationException($"Feuille introuvable : {request.SheetName}");
 
@@ -370,11 +373,12 @@ public sealed class SqlServerImportRepository(
 
     private static IReadOnlyList<ImportFieldDefinition> BuildOrderFieldDefinitions() =>
     [
-        new(ImportFieldKeys.OrderCustomer, "Client", true, "Colonne metadonnee contenant le client."),
-        new(ImportFieldKeys.OrderReference, "Reference commande / article", true, "Reference utilisee pour la commande et l'article importe."),
-        new(ImportFieldKeys.OrderDueDate, "Delai client / date", false, "Date cible lue si elle existe."),
-        new(ImportFieldKeys.OrderGauge, "Jauge", false, "Information informative conservee dans le libelle article."),
-        new(ImportFieldKeys.OrderVersion, "Version / couleur", false, "Utilisee comme couleur si la valeur est presente.")
+        new(ImportFieldKeys.OrderCustomer, "Client", true, "Client du bon de commande (ex. PROMOD)."),
+        new(ImportFieldKeys.OrderReference, "N° commande", true, "Numéro de commande (ex. SO26000329)."),
+        new(ImportFieldKeys.OrderArticle, "Article / modèle", true, "Code article produit fini (ex. MBERTILLE)."),
+        new(ImportFieldKeys.OrderDueDate, "Date mise à disposition", false, "Date cible / délai client."),
+        new(ImportFieldKeys.OrderGauge, "Jauge / info", false, "Information complémentaire conservée dans le libellé."),
+        new(ImportFieldKeys.OrderVersion, "Couleur", false, "Couleur du modèle (ex. MAUVE).")
     ];
 
     private static IReadOnlyList<ImportFieldDefinition> BuildBomFieldDefinitions() =>
@@ -390,10 +394,21 @@ public sealed class SqlServerImportRepository(
 
     private static ImportSheetAnalysis AnalyzeOrderSheet(WorkbookSheet sheet, List<string> warnings)
     {
-        var metadataLabelRow = FindFirstMatchingRow(sheet, ["client", "ref", "version", "jauge"]);
+        var metadataLabelRow = FindFirstMatchingRow(sheet, ["client", "ref", "article", "couleur", "version", "jauge", "delai"]);
         int? metadataValueRow = metadataLabelRow is int labelRow ? labelRow + 1 : null;
-        var sizeHeaderRow = FindRowContaining(sheet, "taille");
-        var quantityRow = FindRowContainingAny(sheet, ["total comde", "total commande"]);
+        var sizeHeaderRow = FindRowContaining(sheet, "taille")
+            ?? FindRowContainingAny(sheet, ["xs", "xxl", "xl"]);
+        var quantityRow = FindRowContainingAny(sheet, ["total comde", "total commande", "quantite", "quantité"]);
+
+        // Feuille canonique bon de commande PDF : tailles juste après les valeurs, quantités ensuite.
+        if (sheet.Name.Equals("BonDeCommande", StringComparison.OrdinalIgnoreCase))
+        {
+            metadataLabelRow ??= 1;
+            metadataValueRow ??= 2;
+            sizeHeaderRow ??= 3;
+            quantityRow ??= 4;
+            warnings.Add("Bon de commande PDF reconnu (format PROMOD / YBONSO) — champs préremplis automatiquement, modifiables avant import.");
+        }
 
         if (metadataLabelRow is null)
         {
@@ -415,10 +430,11 @@ public sealed class SqlServerImportRepository(
         {
             var row = GetRow(sheet, rowIndex);
             suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderCustomer, "Client", row, ["client"]));
-            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderReference, "Reference commande / article", row, ["ref"]));
-            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderDueDate, "Delai client / date", row, ["delai", "date"]));
-            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderGauge, "Jauge", row, ["jauge"]));
-            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderVersion, "Version / couleur", row, ["version", "couleur"]));
+            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderReference, "N° commande", row, ["ref commande", "commande", "ref"]));
+            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderArticle, "Article / modèle", row, ["article", "modele", "modèle"]));
+            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderDueDate, "Date mise à disposition", row, ["delai", "délai", "date", "disposition"]));
+            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderGauge, "Jauge / info", row, ["jauge"]));
+            suggestedMappings.Add(BuildMapping(ImportFieldKeys.OrderVersion, "Couleur", row, ["couleur", "version"]));
         }
 
         return new ImportSheetAnalysis(
@@ -430,7 +446,8 @@ public sealed class SqlServerImportRepository(
             suggestedMappings,
             metadataLabelRow,
             metadataValueRow,
-            quantityRow);
+            quantityRow,
+            SuggestedSizeHeaderRow: sizeHeaderRow);
     }
 
     private static ImportSheetAnalysis AnalyzeBomSheet(
@@ -725,64 +742,11 @@ public sealed class SqlServerImportRepository(
         return double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
     }
 
-    private static List<WorkbookSheet> LoadWorkbook(byte[] fileContent)
+    private static List<WorkbookSheet> LoadWorkbook(byte[] fileContent, string? fileName = null)
     {
-        if (fileContent is null || fileContent.Length == 0)
-        {
-            throw new InvalidOperationException("Fichier Excel vide ou illisible. Vérifiez le fichier Montepull (.xlsx / .xls).");
-        }
-
-        try
-        {
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            using var stream = new MemoryStream(fileContent);
-            using var reader = ExcelReaderFactory.CreateReader(stream);
-            var dataSet = reader.AsDataSet(new ExcelDataSetConfiguration
-            {
-                UseColumnDataType = false
-            });
-
-            if (dataSet.Tables.Count == 0)
-            {
-                throw new InvalidOperationException("Le classeur Excel ne contient aucune feuille.");
-            }
-
-            var sheets = new List<WorkbookSheet>();
-            foreach (DataTable table in dataSet.Tables)
-            {
-                var rows = new List<IReadOnlyList<string>>();
-                var columnCount = table.Columns.Count;
-                foreach (DataRow dataRow in table.Rows)
-                {
-                    var values = new List<string>();
-                    for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
-                    {
-                        values.Add(ToCellText(dataRow[columnIndex]));
-                    }
-
-                    rows.Add(values);
-                }
-
-                sheets.Add(new WorkbookSheet(table.TableName, rows, columnCount));
-            }
-
-            if (sheets.All(s => s.Rows.Count == 0))
-            {
-                throw new InvalidOperationException("Toutes les feuilles du classeur sont vides.");
-            }
-
-            return sheets;
-        }
-        catch (InvalidOperationException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException(
-                "Impossible de lire le fichier Excel. Formats supportés : .xlsx, .xls. Détail : " + ex.Message,
-                ex);
-        }
+        return UniversalWorkbookLoader.Load(fileContent, fileName)
+            .Select(sheet => new WorkbookSheet(sheet.Name, sheet.Rows, sheet.ColumnCount))
+            .ToList();
     }
 
     private static string ToCellText(object? value)
@@ -977,38 +941,48 @@ public sealed class SqlServerImportRepository(
             ],
             cancellationToken);
 
-        await CreateDefaultCoefficientsForNewOptionAsync(connection, transaction, attributeCode, technicalCode, cancellationToken);
+        await CreateDefaultCoefficientsForNewOptionAsync(connection, transaction, attributeId, optionId, cancellationToken);
         warnings.Add($"Nouvelle option {attributeCode} creee automatiquement : {displayValue}.");
         return optionId;
     }
 
-    private async Task CreateDefaultCoefficientsForNewOptionAsync(
+    private static async Task CreateDefaultCoefficientsForNewOptionAsync(
         SqlConnection connection,
         SqlTransaction transaction,
-        string attributeCode,
-        string technicalCode,
+        int attributeId,
+        int optionId,
         CancellationToken cancellationToken)
     {
-        foreach (var tableName in new[] { "consumption_coefficients", "time_coefficients" })
-        {
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = $"""
-                INSERT INTO {tableName} (product_family_id, attribute_code, option_code, coefficient)
-                SELECT pf.id, @attributeCode, @technicalCode, 1.0
-                FROM product_families pf
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM {tableName} c
-                    WHERE c.product_family_id = pf.id
-                      AND c.attribute_code = @attributeCode
-                      AND c.option_code = @technicalCode
-                )
-                """;
-            command.Parameters.AddWithValue("@attributeCode", attributeCode);
-            command.Parameters.AddWithValue("@technicalCode", technicalCode);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO consumption_coefficients (product_family_id, attribute_id, option_id, coefficient, source_status, status, notes)
+            SELECT pf.id, @attributeId, @optionId, 1.0, 'SIMULATED', 'VALIDATED',
+                   N'Coefficient cree automatiquement pour nouvelle option.'
+            FROM product_families pf
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM consumption_coefficients cc
+                WHERE cc.product_family_id = pf.id
+                  AND cc.attribute_id = @attributeId
+                  AND cc.option_id = @optionId
+            );
+
+            INSERT INTO time_coefficients (product_family_id, attribute_id, option_id, coefficient, source_status, status, notes)
+            SELECT pf.id, @attributeId, @optionId, 1.0, 'SIMULATED', 'VALIDATED',
+                   N'Coefficient cree automatiquement pour nouvelle option.'
+            FROM product_families pf
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM time_coefficients tc
+                WHERE tc.product_family_id = pf.id
+                  AND tc.attribute_id = @attributeId
+                  AND tc.option_id = @optionId
+            );
+            """;
+        command.Parameters.AddWithValue("@attributeId", attributeId);
+        command.Parameters.AddWithValue("@optionId", optionId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private async Task<int> UpsertSalesOrderAsync(

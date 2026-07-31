@@ -2,13 +2,28 @@
 @rendermode InteractiveServer
 @using Axioplan.GammesNomenclatures.Application.Aps
 @using Axioplan.GammesNomenclatures.Application.Models
+@using Axioplan.GammesNomenclatures.Application.Mvp0
 @using Axioplan.GammesNomenclatures.Domain.Aps.Compiler
+@using Axioplan.GammesNomenclatures.Domain.Aps.Schedule
+@using Axioplan.GammesNomenclatures.Domain.Mvp0
 @inject ApsPlanningService PlanningService
+@inject Mvp0WorkflowService Mvp0Workflow
+@inject ApsScheduleDecisionService DecisionService
 
 <PageTitle>APS Planification</PageTitle>
 
 <PageHeader Title="Planification APS"
             Description="Enchaînement CBN segment → capacités nettes (Cap_cum) → charges et saturation (ρ)." />
+
+<DatasetBanner />
+
+@if (_mvp0GateBanner is not null)
+{
+    <AlertPanel Variant="@_mvp0GateBannerVariant" Title="Qualité des données MVP-0">
+        @_mvp0GateBanner
+        <a href="/mvp0">Voir campagnes MVP-0 →</a>
+    </AlertPanel>
+}
 
 @if (!string.IsNullOrEmpty(_error))
 {
@@ -158,6 +173,11 @@
         <p><strong>Goulot :</strong> @_result.Flux.Bottleneck.ConstrainingCode — @_result.Flux.Bottleneck.Explanation</p>
     </section>
 
+    @if (_decision is not null)
+    {
+        <ApsDecisionGanttPanel Schedule="_decision" PanelTitle="@($"{_finishedArticle} · {_segment}")" GanttSvgId="aps-plan-gantt" />
+    }
+
     <section class="card">
         <h3>Traces</h3>
         <ul class="trace-list">
@@ -182,17 +202,44 @@
     private long _existingCbnRunId;
     private bool _publish;
     private ApsPlanningResultDto? _result;
+    private ApsScheduleDecisionResult? _decision;
+    private string? _mvp0GateBanner;
+    private string _mvp0GateBannerVariant = "info";
+    private Guid? _approvedCampaignId;
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
             await PlanningService.EnsureReadyAsync();
+            await LoadMvp0GateBannerAsync();
         }
         catch (Exception ex)
         {
             _error = ex.Message;
         }
+    }
+
+    private async Task LoadMvp0GateBannerAsync()
+    {
+        await Mvp0Workflow.EnsureReadyAsync();
+        var campaigns = await Mvp0Workflow.ListCampaignsAsync();
+        var goCampaigns = campaigns
+            .Where(c => c.GateOutcome is Mvp0GateOutcomes.Go or Mvp0GateOutcomes.GoWithReservations)
+            .ToList();
+
+        if (goCampaigns.Count == 0)
+        {
+            _mvp0GateBannerVariant = "warning";
+            _mvp0GateBanner = "Aucune campagne MVP-0 avec gate GO ou GO_WITH_RESERVATIONS. Les calculs REAL seront refusés.";
+            _approvedCampaignId = null;
+            return;
+        }
+
+        var latest = goCampaigns.OrderByDescending(c => c.CreatedAtUtc).First();
+        _approvedCampaignId = latest.Id;
+        _mvp0GateBannerVariant = latest.GateOutcome == Mvp0GateOutcomes.Go ? "success" : "warning";
+        _mvp0GateBanner = $"Campagne {latest.Code} ({latest.FamilyCode}) — gate {latest.GateOutcome}. Planification APS autorisée sur dataset validé.";
     }
 
     private async Task RunPlanningAsync()
@@ -223,15 +270,23 @@
                 DateOnly.FromDateTime(_to),
                 cbn,
                 _existingCbnRunId > 0 ? _existingCbnRunId : null,
-                _publish));
+                _publish,
+                SourceType: CalculationSourceType.Real,
+                Mvp0CampaignId: _approvedCampaignId,
+                RunSegmentCascade: cbn is not null));
+
+            _decision = DecisionService.BuildFromPlanning(
+                _result,
+                DateOnly.FromDateTime(_needDate));
 
             _message = _result.SegmentCbnRunId is long id
-                ? $"Planification terminee — CBN #{id}, goulot {_result.Flux.Bottleneck.ConstrainingCode}."
-                : $"Planification terminee — goulot {_result.Flux.Bottleneck.ConstrainingCode}.";
+                ? $"Planification terminee — CBN #{id}, goulot {_result.Flux.Bottleneck.ConstrainingCode}, duree {_decision.Duration.WorkingDays} j ouvres."
+                : $"Planification terminee — goulot {_result.Flux.Bottleneck.ConstrainingCode}, duree {_decision.Duration.WorkingDays} j ouvres.";
         }
         catch (Exception ex)
         {
             _error = ex.Message;
+            _decision = null;
         }
         finally
         {

@@ -1,7 +1,9 @@
 using Axioplan.GammesNomenclatures.Application.Mvp0;
 using Axioplan.GammesNomenclatures.Application.Aps;
 using Axioplan.GammesNomenclatures.Application.Cbn;
+using Axioplan.GammesNomenclatures.Application.Commandes;
 using Axioplan.GammesNomenclatures.Application.Imports;
+using Axioplan.GammesNomenclatures.Application.MontepullImport;
 using Axioplan.GammesNomenclatures.Application.Pegging;
 using Axioplan.GammesNomenclatures.Application.Abstractions;
 using Axioplan.GammesNomenclatures.Application.Models;
@@ -19,6 +21,7 @@ public static class DependencyInjection
     {
         services.AddScoped<SimulationService>();
         services.AddArticleApplication();
+        services.AddCommandeApplication();
         services.AddParameterApplication();
         services.AddCbnApplication();
         services.AddPeggingApplication();
@@ -32,7 +35,10 @@ public static class DependencyInjection
         services.AddApsCtpApplication();
         services.AddApsPhase9Application();
         services.AddApsPlanningApplication();
+        services.AddApsScheduleDecisionApplication();
         services.AddMvp0Application();
+        services.AddMontepullImportApplication();
+        services.AddPlanningDatasetProvider();
         return services;
     }
 }

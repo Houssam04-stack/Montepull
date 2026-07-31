@@ -22,7 +22,7 @@ public sealed class SqlServerArticleRepository(IOptions<DatabaseOptions> options
             JOIN article_categories ac ON ac.id = af.category_id
             LEFT JOIN customers c ON c.id = a.customer_id
             LEFT JOIN articles src ON src.id = a.source_article_id
-            ORDER BY a.created_at DESC, a.code
+            ORDER BY a.code, a.created_at DESC
             """;
 
         return await ReadArticleListAsync(command, cancellationToken);
@@ -770,6 +770,330 @@ public sealed class SqlServerArticleRepository(IOptions<DatabaseOptions> options
         }
 
         return items;
+    }
+
+    public async Task<ArticleBomEditorDto> GetBomForArticleAsync(
+        int finishedGoodArticleId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        await EnsureBomLineAttributeColumnsAsync(connection, cancellationToken);
+
+        string articleCode;
+        string articleLabel;
+        await using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT code, label FROM articles WHERE id = @id";
+            cmd.Parameters.AddWithValue("@id", finishedGoodArticleId);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException($"Article introuvable : {finishedGoodArticleId}");
+            }
+
+            articleCode = reader.GetString(0);
+            articleLabel = reader.GetString(1);
+        }
+
+        int? bomBaseId = null;
+        string? bomCode = null;
+        await using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT bb.id, bb.code
+                FROM article_bom_assignments aba
+                INNER JOIN bom_bases bb ON bb.id = aba.bom_base_id
+                WHERE aba.article_id = @articleId
+                """;
+            cmd.Parameters.AddWithValue("@articleId", finishedGoodArticleId);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                bomBaseId = reader.GetInt32(0);
+                bomCode = reader.GetString(1);
+            }
+        }
+
+        var lines = new List<ArticleBomLineDto>();
+        if (bomBaseId is int bomId)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    bl.id, bl.line_no, bl.component_article_id, c.code, c.label,
+                    bl.quantity_base, bl.unit, bl.loss_rate,
+                    bl.size_option_id, sz.technical_code,
+                    bl.color_option_id, col.technical_code
+                FROM bom_base_lines bl
+                INNER JOIN articles c ON c.id = bl.component_article_id
+                LEFT JOIN attribute_options sz ON sz.id = bl.size_option_id
+                LEFT JOIN attribute_options col ON col.id = bl.color_option_id
+                WHERE bl.bom_base_id = @bomId
+                ORDER BY bl.line_no, bl.id
+                """;
+            cmd.Parameters.AddWithValue("@bomId", bomId);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                lines.Add(new ArticleBomLineDto(
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetDouble(5),
+                    reader.GetString(6),
+                    reader.GetDouble(7),
+                    reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9),
+                    reader.IsDBNull(10) ? null : reader.GetInt32(10),
+                    reader.IsDBNull(11) ? null : reader.GetString(11)));
+            }
+        }
+
+        return new ArticleBomEditorDto(
+            finishedGoodArticleId, articleCode, articleLabel, bomBaseId, bomCode, lines);
+    }
+
+    public async Task<ArticleBomLineDto> UpsertArticleBomLineAsync(
+        UpsertArticleBomLineRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.FinishedGoodArticleId <= 0)
+        {
+            throw new InvalidOperationException("Article produit fini obligatoire.");
+        }
+
+        if (request.ComponentArticleId <= 0)
+        {
+            throw new InvalidOperationException("Composant obligatoire.");
+        }
+
+        if (request.Quantity < 0)
+        {
+            throw new InvalidOperationException("La quantité ne peut pas être négative.");
+        }
+
+        await using var connection = OpenConnection();
+        await EnsureBomLineAttributeColumnsAsync(connection, cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var bomId = await EnsureBomBaseForArticleAsync(
+                connection, transaction, request.FinishedGoodArticleId, cancellationToken);
+
+            int lineId;
+            if (request.LineId is int existingId and > 0)
+            {
+                await using var upd = connection.CreateCommand();
+                upd.Transaction = transaction;
+                upd.CommandText = """
+                    UPDATE bom_base_lines SET
+                        component_article_id = @comp,
+                        quantity_base = @qty,
+                        unit = @unit,
+                        loss_rate = @loss,
+                        size_option_id = @sizeId,
+                        color_option_id = @colorId
+                    WHERE id = @id AND bom_base_id = @bomId
+                    """;
+                upd.Parameters.AddWithValue("@comp", request.ComponentArticleId);
+                upd.Parameters.AddWithValue("@qty", request.Quantity);
+                upd.Parameters.AddWithValue("@unit", string.IsNullOrWhiteSpace(request.Unit) ? "PIECE" : request.Unit.Trim());
+                upd.Parameters.AddWithValue("@loss", request.LossRate);
+                upd.Parameters.AddWithValue("@sizeId", (object?)request.SizeOptionId ?? DBNull.Value);
+                upd.Parameters.AddWithValue("@colorId", (object?)request.ColorOptionId ?? DBNull.Value);
+                upd.Parameters.AddWithValue("@id", existingId);
+                upd.Parameters.AddWithValue("@bomId", bomId);
+                if (await upd.ExecuteNonQueryAsync(cancellationToken) == 0)
+                {
+                    throw new InvalidOperationException($"Ligne BOM introuvable : {existingId}");
+                }
+
+                lineId = existingId;
+            }
+            else
+            {
+                int nextLineNo;
+                await using (var maxCmd = connection.CreateCommand())
+                {
+                    maxCmd.Transaction = transaction;
+                    maxCmd.CommandText = "SELECT COALESCE(MAX(line_no), 0) + 1 FROM bom_base_lines WHERE bom_base_id = @bomId";
+                    maxCmd.Parameters.AddWithValue("@bomId", bomId);
+                    nextLineNo = Convert.ToInt32(await maxCmd.ExecuteScalarAsync(cancellationToken));
+                }
+
+                await using var ins = connection.CreateCommand();
+                ins.Transaction = transaction;
+                ins.CommandText = """
+                    INSERT INTO bom_base_lines (
+                        bom_base_id, line_no, component_article_id, quantity_base, unit, loss_rate, behavior,
+                        size_option_id, color_option_id)
+                    OUTPUT INSERTED.id
+                    VALUES (@bomId, @lineNo, @comp, @qty, @unit, @loss, N'FIXED', @sizeId, @colorId)
+                    """;
+                ins.Parameters.AddWithValue("@bomId", bomId);
+                ins.Parameters.AddWithValue("@lineNo", nextLineNo);
+                ins.Parameters.AddWithValue("@comp", request.ComponentArticleId);
+                ins.Parameters.AddWithValue("@qty", request.Quantity);
+                ins.Parameters.AddWithValue("@unit", string.IsNullOrWhiteSpace(request.Unit) ? "PIECE" : request.Unit.Trim());
+                ins.Parameters.AddWithValue("@loss", request.LossRate);
+                ins.Parameters.AddWithValue("@sizeId", (object?)request.SizeOptionId ?? DBNull.Value);
+                ins.Parameters.AddWithValue("@colorId", (object?)request.ColorOptionId ?? DBNull.Value);
+                lineId = Convert.ToInt32(await ins.ExecuteScalarAsync(cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            var editor = await GetBomForArticleAsync(request.FinishedGoodArticleId, cancellationToken);
+            return editor.Lines.First(l => l.Id == lineId);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task DeleteArticleBomLineAsync(int bomLineId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM bom_base_lines WHERE id = @id";
+        cmd.Parameters.AddWithValue("@id", bomLineId);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureBomLineAttributeColumnsAsync(
+        SqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        foreach (var sql in new[]
+                 {
+                     """
+                     IF OBJECT_ID(N'dbo.article_bom_assignments', N'U') IS NULL
+                     CREATE TABLE dbo.article_bom_assignments (
+                         id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                         article_id INT NOT NULL UNIQUE,
+                         bom_base_id INT NOT NULL
+                     );
+                     """,
+                     "IF COL_LENGTH('bom_base_lines', 'size_option_id') IS NULL ALTER TABLE bom_base_lines ADD size_option_id INT NULL;",
+                     "IF COL_LENGTH('bom_base_lines', 'color_option_id') IS NULL ALTER TABLE bom_base_lines ADD color_option_id INT NULL;"
+                 })
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = sql;
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static async Task<int> EnsureBomBaseForArticleAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int articleId,
+        CancellationToken cancellationToken)
+    {
+        await using (var find = connection.CreateCommand())
+        {
+            find.Transaction = transaction;
+            find.CommandText = "SELECT bom_base_id FROM article_bom_assignments WHERE article_id = @articleId";
+            find.Parameters.AddWithValue("@articleId", articleId);
+            var existing = await find.ExecuteScalarAsync(cancellationToken);
+            if (existing is not null && existing != DBNull.Value)
+            {
+                return Convert.ToInt32(existing);
+            }
+        }
+
+        int familyId;
+        string articleCode;
+        await using (var art = connection.CreateCommand())
+        {
+            art.Transaction = transaction;
+            art.CommandText = "SELECT family_id, code FROM articles WHERE id = @id";
+            art.Parameters.AddWithValue("@id", articleId);
+            await using var reader = await art.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException($"Article introuvable : {articleId}");
+            }
+
+            familyId = reader.GetInt32(0);
+            articleCode = reader.GetString(1);
+        }
+
+        int productFamilyId;
+        await using (var pf = connection.CreateCommand())
+        {
+            pf.Transaction = transaction;
+            pf.CommandText = "SELECT TOP 1 id FROM product_families WHERE article_family_id = @familyId ORDER BY id";
+            pf.Parameters.AddWithValue("@familyId", familyId);
+            var pfId = await pf.ExecuteScalarAsync(cancellationToken);
+            if (pfId is not null && pfId != DBNull.Value)
+            {
+                productFamilyId = Convert.ToInt32(pfId);
+            }
+            else
+            {
+                await using var createPf = connection.CreateCommand();
+                createPf.Transaction = transaction;
+                createPf.CommandText = """
+                    INSERT INTO product_families (article_family_id, code, label)
+                    OUTPUT INSERTED.id
+                    VALUES (@familyId, @code, @label)
+                    """;
+                var safeCode = articleCode.Length > 40 ? articleCode[..40] : articleCode;
+                createPf.Parameters.AddWithValue("@familyId", familyId);
+                createPf.Parameters.AddWithValue("@code", $"PF_{safeCode}");
+                createPf.Parameters.AddWithValue("@label", $"Famille produit {articleCode}");
+                productFamilyId = Convert.ToInt32(await createPf.ExecuteScalarAsync(cancellationToken));
+            }
+        }
+
+        int bomId;
+        var bomCode = articleCode.Length > 40 ? $"BOM_{articleCode[..40]}" : $"BOM_{articleCode}";
+        await using (var findBom = connection.CreateCommand())
+        {
+            findBom.Transaction = transaction;
+            findBom.CommandText = "SELECT id FROM bom_bases WHERE code = @code";
+            findBom.Parameters.AddWithValue("@code", bomCode);
+            var existingBom = await findBom.ExecuteScalarAsync(cancellationToken);
+            if (existingBom is not null && existingBom != DBNull.Value)
+            {
+                bomId = Convert.ToInt32(existingBom);
+            }
+            else
+            {
+                await using var createBom = connection.CreateCommand();
+                createBom.Transaction = transaction;
+                createBom.CommandText = """
+                    INSERT INTO bom_bases (product_family_id, code, version, status)
+                    OUTPUT INSERTED.id
+                    VALUES (@pfId, @code, 1, N'VALIDATED')
+                    """;
+                createBom.Parameters.AddWithValue("@pfId", productFamilyId);
+                createBom.Parameters.AddWithValue("@code", bomCode);
+                bomId = Convert.ToInt32(await createBom.ExecuteScalarAsync(cancellationToken));
+            }
+        }
+
+        await using (var assign = connection.CreateCommand())
+        {
+            assign.Transaction = transaction;
+            assign.CommandText = """
+                MERGE article_bom_assignments AS target
+                USING (SELECT @articleId AS article_id, @bomId AS bom_base_id) AS source
+                ON target.article_id = source.article_id
+                WHEN MATCHED THEN UPDATE SET bom_base_id = source.bom_base_id
+                WHEN NOT MATCHED THEN INSERT (article_id, bom_base_id) VALUES (source.article_id, source.bom_base_id);
+                """;
+            assign.Parameters.AddWithValue("@articleId", articleId);
+            assign.Parameters.AddWithValue("@bomId", bomId);
+            await assign.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        return bomId;
     }
 
     private SqlConnection OpenConnection()

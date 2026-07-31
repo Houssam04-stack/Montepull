@@ -23,7 +23,10 @@ public sealed record ApsPlanningRequest(
     ApsSegmentCbnRunRequest? CbnRequest = null,
     long? SegmentCbnRunId = null,
     bool PublishFlux = false,
-    ApsSaturationThresholds? Thresholds = null);
+    ApsSaturationThresholds? Thresholds = null,
+    CalculationSourceType SourceType = CalculationSourceType.Real,
+    Guid? Mvp0CampaignId = null,
+    bool RunSegmentCascade = true);
 
 public sealed record ApsPlanningResultDto(
     DateOnly From,
@@ -32,7 +35,14 @@ public sealed record ApsPlanningResultDto(
     ApsSegmentCbnResult? CbnResult,
     IReadOnlyList<ApsResourceCapacitySummaryDto> Capacities,
     ApsFluxComputeResultDto Flux,
-    IReadOnlyList<string> Traces);
+    IReadOnlyList<string> Traces,
+    Guid? Mvp0CampaignId = null,
+    string? Mvp0GateOutcome = null);
+
+public sealed record ApsSegmentCascadeRunDto(
+    IReadOnlyList<ApsSegmentCbnRunDto> SegmentRuns,
+    long? LastRunId,
+    ApsSegmentCbnResult? LastResult);
 
 public sealed record ApsSegmentCbnRunHistoryDto(
     long Id,

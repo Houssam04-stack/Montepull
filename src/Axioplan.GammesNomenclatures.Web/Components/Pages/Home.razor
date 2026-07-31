@@ -8,7 +8,7 @@
 
 <div class="module-grid">
     <ModuleCard Title="Référentiels"
-                Description="Articles, nomenclatures, stock et paramètres de calcul."
+                Description="Articles, nomenclatures et stock."
                 Href="/articles"
                 Status="ModuleStatusKind.Operational" />
     <ModuleCard Title="Importer des données"
@@ -19,12 +19,12 @@
                 Description="Campagnes qualité, validation, gate et rapport de fiabilité."
                 Href="/mvp0"
                 Status="ModuleStatusKind.Partial" />
-    <ModuleCard Title="Calculer les besoins CBN"
-                Description="Calcul métier, simulation MRP avec traçabilité, ou CBN APS segment."
-                Href="/cbn"
+    <ModuleCard Title="CBN — Duplication, commandes & calcul"
+                Description="Simulation (Duplication / CBN) et métier (commandes importées / calcul) dans un seul module."
+                Href="/simulation-mrp?ensure=tunimapulf"
                 Status="ModuleStatusKind.Operational" />
-    <ModuleCard Title="Vérifier stock et pegging"
-                Description="Consultation stock par lots et affectation besoins / offres."
+    <ModuleCard Title="Vérifier le stock"
+                Description="Consultation stock par lots."
                 Href="/stock"
                 Status="ModuleStatusKind.Operational" />
     <ModuleCard Title="Calculer charges et capacités"
@@ -40,9 +40,10 @@
 <section class="card">
     <h3>Accès rapides secondaires</h3>
     <ul class="link-list">
-        <li><a href="/pegging">Pegging</a></li>
-        <li><a href="/parametres">Paramètres</a></li>
-        <li><a href="/simulation-mrp">Simulation MRP (atelier)</a></li>
+        <li><a href="/simulation-mrp?ensure=tunimapulf">CBN unifié (Duplication + Métier)</a></li>
+        <li><a href="/simulation-mrp?tab=metier">CBN — onglet Métier</a></li>
+        <li><a href="/pegging/legacy">Pegging REAL (legacy)</a></li>
+        <li><a href="/parametres">Paramètres (hors menu)</a></li>
         <li><a href="/">Simulation gammes (legacy)</a></li>
         <li><a href="/admin/documentation">Documentation technique</a></li>
     </ul>

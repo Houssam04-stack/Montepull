@@ -11,4 +11,11 @@ bin/
 obj/
 *.user
 .vs/
+TestResults/
+**/TestResults/
+docs/_extract/
+*.log
+.env
+.env.*
+!.env.example
 

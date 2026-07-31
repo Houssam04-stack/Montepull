@@ -1,0 +1,13 @@
+@page "/pegging"
+@rendermode InteractiveServer
+@inject NavigationManager Nav
+
+<PageTitle>Pegging</PageTitle>
+<LoadingState Message="Ouverture du pegging…" />
+
+@code {
+    protected override void OnInitialized()
+    {
+        Nav.NavigateTo("/pegging/legacy", replace: true);
+    }
+}

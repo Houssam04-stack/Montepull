@@ -31,7 +31,10 @@ public interface IMvp0Repository
     Task SaveValidationRulesSnapshotAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Convertit un fichier Excel en feuilles CSV pour l'assistant MVP-0 (aucune persistance).</summary>
-    Task<IReadOnlyList<(string SheetName, string Csv)>> ConvertExcelToCsvSheetsAsync(byte[] fileContent, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<(string SheetName, string Csv)>> ConvertExcelToCsvSheetsAsync(
+        byte[] fileContent,
+        string? fileName = null,
+        CancellationToken cancellationToken = default);
 
     Task<(IReadOnlyList<Mvp0ArticleRow> Articles, IReadOnlyList<Mvp0BomRow> Boms, IReadOnlyList<Mvp0RoutingOpRow> Ops,
         IReadOnlyList<Mvp0CalendarRow> Calendars, IReadOnlyList<Mvp0WorkOrderActual> Wos, IReadOnlySet<string> Centers,
