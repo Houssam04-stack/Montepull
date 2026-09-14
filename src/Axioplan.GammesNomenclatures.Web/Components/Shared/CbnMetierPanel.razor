@@ -412,7 +412,7 @@ else
                 </div>
                 <p class="hint">
                     Commande @_result.SalesOrderCode — Famille @_result.ProductFamilyCode — @_result.Status
-                    · <a href="/pegging/legacy">Ouvrir le pegging</a>
+                    · <a href="@($"/pegging/legacy?cbnRunId={_result.RunId}")">Ouvrir le pegging</a>
                 </p>
             </section>
 

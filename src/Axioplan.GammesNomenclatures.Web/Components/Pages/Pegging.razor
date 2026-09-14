@@ -2,6 +2,9 @@
 @rendermode InteractiveServer
 @inject PeggingService PeggingService
 @inject ICbnApplicationService CbnApplication
+@using Axioplan.GammesNomenclatures.Application.Mvp0
+@inject Mvp0ContextService ContextService
+@inject NavigationManager Navigation
 
 <PageTitle>Pegging (legacy REAL)</PageTitle>
 
@@ -38,6 +41,11 @@ else
         <button class="btn-primary mt-3" @onclick="RunPeggingAsync" disabled="@_isRunning">
             @(_isRunning ? "Calcul..." : "Calculer le pegging")
         </button>
+        @if (_result is not null || _existingHistory.Count > 0)
+        {
+            <button class="btn-secondary mt-3" @onclick="ContinueToMvpAsync" disabled="@_isRunning">Continuer vers MVP-0</button>
+            <p class="hint">Le contexte de la commande, du CBN et de cette version du pegging sera conservé. MVP-0 valide son propre jeu de données.</p>
+        }
         @if (!string.IsNullOrWhiteSpace(_runError))
         {
             <div class="alert alert-warning mt-3">@_runError</div>
@@ -151,7 +159,14 @@ else
     private string? _runError;
     private PeggingRunResult? _result;
 
-    protected override async Task OnInitializedAsync()
+    [SupplyParameterFromQuery] public int? CbnRunId { get; set; }
+    private async Task ContinueToMvpAsync()
+    {
+        try { var id = await ContextService.ContinueAsync(_selectedCbnRunId, _result?.PeggingRunId ?? _existingHistory.OrderByDescending(h => h.PeggingRunId).FirstOrDefault()?.PeggingRunId); Navigation.NavigateTo($"/mvp0/workflow/{id}"); }
+        catch (Exception ex) { _runError = ex.Message; }
+    }
+
+    protected override async Task OnParametersSetAsync()
     {
         try
         {
@@ -162,7 +177,10 @@ else
                 return;
             }
 
-            _selectedCbnRunId = _cbnRuns[0].Id;
+            _loadError = null;
+            _result = null;
+            if (CbnRunId.HasValue && !_cbnRuns.Any(r => r.Id == CbnRunId)) { _loadError = "Run CBN introuvable."; return; }
+            _selectedCbnRunId = CbnRunId ?? _cbnRuns[0].Id;
             await LoadExistingLinksAsync();
         }
         catch (Exception ex)

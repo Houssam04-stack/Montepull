@@ -14,13 +14,14 @@ public static class Mvp0Extensions
     public static IServiceCollection AddMvp0Application(this IServiceCollection services)
     {
         services.AddScoped<Mvp0WorkflowService>();
+        services.AddScoped<Mvp0ContextService>();
         services.AddMvp0ApsGateGuard();
         services.AddMvp0ApsBridge();
         return services;
     }
 }
 
-public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridgeService bridgeService)
+public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridgeService bridgeService, IMvp0ContextRepository? contextRepository = null)
 {
     public static IReadOnlyList<string> Steps { get; } =
     [
@@ -81,7 +82,7 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridg
         var report = await repository.GetReportAsync(campaignId, cancellationToken) ?? "";
         var completed = DeriveCompleted(c, anoms, bps, input, bt, result, pa, gate, report);
         var current = Steps.FirstOrDefault(s => !completed.Contains(s)) ?? "Rapport";
-        return new Mvp0WorkflowStateDto(ToDto(c), completed, current, anoms, bps, input, bt, result, gate, pn, pc, pa, report);
+        return new Mvp0WorkflowStateDto(ToDto(c), completed, current, anoms, bps, input, bt, result, gate, pn, pc, pa, report) { Context = contextRepository is null ? null : await contextRepository.GetCampaignContextAsync(campaignId, cancellationToken) };
     }
 
     public Task<IReadOnlyList<Mvp0ImportBatchDto>> ListImportBatchesAsync(Guid campaignId, CancellationToken cancellationToken = default)
@@ -154,6 +155,8 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridg
     public async Task<Mvp0ImportBatchDto> ImportCleanRealSeedAsync(Guid campaignId, CancellationToken cancellationToken = default)
     {
         await EnsureAllAsync(cancellationToken);
+        if (contextRepository is not null && await contextRepository.GetCampaignContextAsync(campaignId, cancellationToken) is not null)
+            throw new InvalidOperationException("Les seeds autonomes ne remplacent pas le contexte lié. Importer les données de qualité de la campagne.");
         var camp = await repository.GetCampaignAsync(campaignId) ?? throw new InvalidOperationException("Campagne introuvable.");
         if (camp.Provenance == Mvp0Provenance.Simulated)
             throw new InvalidOperationException("Import clean REAL interdit sur campagne SIMULATED — créer une campagne REAL.");
@@ -208,6 +211,8 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridg
     public async Task<Mvp0ImportBatchDto> ImportCsvDemoSeedAsync(Guid campaignId, CancellationToken cancellationToken = default)
     {
         await EnsureAllAsync(cancellationToken);
+        if (contextRepository is not null && await contextRepository.GetCampaignContextAsync(campaignId, cancellationToken) is not null)
+            throw new InvalidOperationException("Les seeds autonomes ne remplacent pas le contexte lié. Importer les données de qualité de la campagne.");
         var camp = await repository.GetCampaignAsync(campaignId) ?? throw new InvalidOperationException("Campagne introuvable.");
         await repository.UpdateCampaignStatusAsync(campaignId, Mvp0CampaignStatuses.Importing, cancellationToken: cancellationToken);
 
@@ -429,6 +434,7 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridg
         var p90 = state.Backtest?.P90DateErrorDays.ToString("F1", CultureInfo.InvariantCulture) ?? "—";
         var mape = state.Backtest?.MapeDuration.ToString("F1", CultureInfo.InvariantCulture) ?? "—";
 
+        var contextHtml = state.Context is { } ctx ? "<div class=\"box\"><b>Contexte:</b> " + System.Net.WebUtility.HtmlEncode(ctx.OrderCode + " / " + ctx.FamilyCode) + $" — CBN #{ctx.CbnRunId}, pegging #{ctx.PeggingRunId} v{ctx.PeggingVersion}. Jeu de qualité indépendant des allocations.</div>" : "";
         var html = new StringBuilder()
             .Append("<html><head><meta charset=\"utf-8\"><title>Gate 0→1 — ").Append(System.Net.WebUtility.HtmlEncode(c.Code)).Append("</title>")
             .Append("<style>body{font-family:Segoe UI,Arial,sans-serif;font-size:12px;margin:24px} h1{font-size:18px}")
@@ -441,6 +447,7 @@ public sealed class Mvp0WorkflowService(IMvp0Repository repository, Mvp0ApsBridg
             .Append("<b>Provenance:</b> ").Append(c.Provenance)
             .Append(" &nbsp; <b>Version import:</b> ").Append(c.ImportVersion)
             .Append(" &nbsp; <b>Statut:</b> ").Append(c.Status).Append("</div>")
+            .Append(contextHtml)
             .Append("<table><tr><th>Score intrant</th><th>Score résultat</th><th>Gate</th><th>Planificateur</th></tr><tr>")
             .Append("<td>").Append(inputScore).Append("</td><td>").Append(resultScore).Append("</td>")
             .Append("<td><b>").Append(System.Net.WebUtility.HtmlEncode(gateOutcome)).Append("</b></td>")

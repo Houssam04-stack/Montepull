@@ -32,6 +32,7 @@ public static class DependencyInjection
         services.AddSingleton<ApsSchemaBootstrap>();
         services.AddSingleton<Mvp0SchemaBootstrap>();
         services.AddScoped<IMvp0Repository, SqlServerMvp0Repository>();
+        services.AddScoped<IMvp0ContextRepository, SqlServerMvp0ContextRepository>();
         services.AddScoped<IMvp0ApsBridgeRepository, SqlServerMvp0ApsBridgeRepository>();
         services.AddScoped<IApsJournalRepository, SqlServerApsJournalRepository>();
         services.AddScoped<IApsExpectationRepository, SqlServerApsExpectationRepository>();

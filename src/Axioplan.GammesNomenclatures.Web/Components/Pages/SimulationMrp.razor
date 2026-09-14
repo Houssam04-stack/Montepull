@@ -841,7 +841,7 @@ else
                 await LoadSimulationDataAsync();
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not NavigationException)
         {
             _error = ex.Message;
         }

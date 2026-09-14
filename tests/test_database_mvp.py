@@ -38,7 +38,9 @@ class DatabaseMvpTests(unittest.TestCase):
         self.assertEqual(profile_count, 1)
 
     def test_prod_operations_are_loaded(self):
-        operation_count = self.connection.execute("SELECT COUNT(*) FROM routing_base_operations").fetchone()[0]
+        operation_count = self.connection.execute("SELECT COUNT(*) FROM routing_base_operations ops "
+            "JOIN routing_bases rb ON rb.id = ops.routing_base_id "
+            "WHERE rb.code = 'GAM_BASE_PULL_COL_ROND_PROD_EXEMPLE'").fetchone()[0]
 
         self.assertEqual(operation_count, 30)
 

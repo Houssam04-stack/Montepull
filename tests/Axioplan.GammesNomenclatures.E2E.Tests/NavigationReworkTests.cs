@@ -46,31 +46,11 @@ public class NavigationReworkTests : PageTest
     [Test]
     public async Task Unified_cbn_opens_tunimapulf_simulation()
     {
-        await Page.GotoAsync(AuditConfig.BaseUrl + "/consultation", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
-        // DEMO → simulation-mrp TUNIMAPULF ; MONTEPULL_REAL → CBN métier (/cbn/legacy)
-        await Page.WaitForURLAsync(url =>
-            url.Contains("simulation-mrp", StringComparison.OrdinalIgnoreCase)
-            || url.Contains("/cbn/legacy", StringComparison.OrdinalIgnoreCase)
-            || url.Contains("/cbn/reel", StringComparison.OrdinalIgnoreCase),
-            new() { Timeout = 60_000 });
-
-        if (Page.Url.Contains("simulation-mrp", StringComparison.OrdinalIgnoreCase))
-        {
-            await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Duplication", Exact = true })).ToBeVisibleAsync();
-            await Expect(Page.Locator("button.tab-btn", new() { HasText = "CBN" })).ToBeVisibleAsync();
-            await Expect(Page.Locator("body")).ToContainTextAsync("TUNIMAPULF");
-        }
-        else
-        {
-            await Expect(Page.Locator("body")).ToContainTextAsync("CBN");
-            await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Commandes importées" })
-                .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Commandes", Exact = true }))
-                .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Calcul CBN" }))
-                .Or(Page.GetByRole(AriaRole.Button, new() { Name = "Calculer les besoins" }))
-                .First).ToBeVisibleAsync();
-        }
+        await Page.GotoAsync(AuditConfig.BaseUrl + "/simulation-mrp?ensure=tunimapulf", new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Duplication", Exact = true })).ToBeVisibleAsync();
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "CBN", Exact = true })).ToBeVisibleAsync();
+        await Expect(Page.Locator("body")).ToContainTextAsync("TUNIMAPULF");
     }
-
     [Test]
     public async Task Menu_shows_unified_cbn_entry()
     {

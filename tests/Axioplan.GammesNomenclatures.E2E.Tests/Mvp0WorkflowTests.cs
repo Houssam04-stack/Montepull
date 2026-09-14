@@ -120,6 +120,6 @@ public class Mvp0WorkflowTests : PageTest
     {
         await Page.GotoAsync(AuditConfig.BaseUrl + "/mvp0/imports");
         await WaitBlazorAsync();
-        await Expect(Page.GetByRole(AriaRole.Heading, new() { Name = "Assistant CSV" })).ToBeVisibleAsync();
+        await Expect(Page.GetByRole(AriaRole.Heading, new() { Name = "Assistant import" })).ToBeVisibleAsync();
     }
 }

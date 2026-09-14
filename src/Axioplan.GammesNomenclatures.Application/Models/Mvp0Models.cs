@@ -44,4 +44,7 @@ public sealed record Mvp0WorkflowStateDto(
     string? PlannerName,
     string? PlannerComment,
     bool PlannerApproved,
-    string ReportHtml);
+    string ReportHtml)
+{
+    public Mvp0BusinessContext? Context { get; init; }
+}

@@ -4,6 +4,7 @@
 @using Axioplan.GammesNomenclatures.Application.Models
 @using Axioplan.GammesNomenclatures.Domain.Mvp0
 @inject Mvp0WorkflowService Workflow
+@inject Mvp0ContextService ContextService
 @inject IJSRuntime Js
 
 <PageTitle>MVP-0 Parcours</PageTitle>
@@ -21,6 +22,20 @@ else
     <h2>@_state.Campaign.Code — @_state.Campaign.FamilyCode</h2>
     <p>Statut <strong>@_state.Campaign.Status</strong> · Provenance <strong>@_state.Campaign.Provenance</strong> · Étape <strong>@_state.CurrentStep</strong></p>
 
+    @if (_state.Context is { } context)
+    {
+        <section class="card">
+            <h3>Contexte de la campagne</h3>
+            <p>Commande <strong>@context.OrderCode</strong> · Famille <strong>@context.FamilyCode</strong> · Articles @string.Join(", ", context.ArticleCodes)</p>
+            <p>CBN #@context.CbnRunId · Pegging #@context.PeggingRunId (v@(context.PeggingVersion)) · Source @(context.SourceDataset ?? "non renseignée") · Lot @(context.ImportedBatchId?.ToString() ?? "non lié")</p>
+            @if (_state.Gate is { } gate)
+            {
+                <p><strong>Gate : @gate.Outcome</strong> · @gate.Reason</p>
+            }
+            <p class="hint">Import de contexte limité aux articles et à la BOM. Gammes, calendriers, centres, liens BOM-opérations et historique OF restent à fournir.</p>
+            <p class="hint">Le CBN calcule les besoins ; le pegging décrit leur couverture. MVP-0 valide un jeu de qualité indépendant. Les allocations ne déterminent pas le Gate.</p>
+        </section>
+    }
     <div class="mvp0-steps">
         @foreach (var s in Mvp0WorkflowService.Steps)
         {
@@ -33,8 +48,15 @@ else
 
     <section class="card">
         <h3>Actions d’étape</h3>
-        <button class="btn-secondary" @onclick="ImportAsync" disabled="@_busy">2. Import seed anomalies</button>
-        <button class="btn-secondary" @onclick="ImportCleanAsync" disabled="@_busy">2b. Import seed REAL propre</button>
+        @if (_state.Context is null)
+        {
+            <button class="btn-secondary" @onclick="ImportAsync" disabled="@_busy">2. Import seed anomalies</button>
+            <button class="btn-secondary" @onclick="ImportCleanAsync" disabled="@_busy">2b. Import seed REAL propre</button>
+        }
+        else
+        {
+            <button class="btn-secondary" @onclick="ImportContextAsync" disabled="@_busy">2. Importer articles et BOM du contexte</button>
+        }
         <a class="btn-secondary" href="/mvp0/imports">Assistant CSV</a>
         <button class="btn-secondary" @onclick="ValidateAsync" disabled="@_busy">3. Validation</button>
         <button class="btn-secondary" @onclick="BypassAllBlockingAsync" disabled="@_busy">4. By-pass bloquants (tracé)</button>
@@ -131,6 +153,7 @@ else
     private string _planner = "Planificateur";
     private string _comment = "Revue MVP-0";
     private bool _approved = true;
+    private Guid? _formCampaignId;
     private bool _busy;
     private string? _error;
     private string? _info;
@@ -139,10 +162,21 @@ else
 
     private async Task ReloadAsync()
     {
-        try { _state = await Workflow.GetStateAsync(CampaignId); }
+        try
+        {
+            _state = await Workflow.GetStateAsync(CampaignId);
+            if (_formCampaignId != CampaignId)
+            {
+                _planner = _state.PlannerName ?? "Planificateur";
+                _comment = _state.PlannerComment ?? "Revue MVP-0";
+                _approved = _state.PlannerName is null || _state.PlannerApproved;
+                _formCampaignId = CampaignId;
+            }
+        }
         catch (Exception ex) { _error = ex.Message; }
     }
 
+    private async Task ImportContextAsync() => await Run(() => ContextService.ImportContextAsync(CampaignId));
     private async Task ImportAsync() => await Run(() => Workflow.ImportCsvDemoSeedAsync(CampaignId));
     private async Task ImportCleanAsync() => await Run(() => Workflow.ImportCleanRealSeedAsync(CampaignId));
     private async Task ValidateAsync() => await Run(() => Workflow.RunValidationAsync(CampaignId));

@@ -118,7 +118,14 @@ public static class PeggingEngine
                 break;
             }
 
-            var qty = Math.Min(remaining, supply.QuantityAvailable);
+            var alreadyAllocated = links
+                .Where(link => link.Direction == "DOWNSTREAM"
+                    && link.SourceEntityType == "MATERIAL_REQUIREMENT"
+                    && link.TargetEntityType == supplyEntityType
+                    && link.TargetEntityId == supply.EntityId)
+                .Sum(link => link.Quantity);
+            var available = Math.Max(0, supply.QuantityAvailable - alreadyAllocated);
+            var qty = Math.Min(remaining, available);
             if (qty <= 0)
             {
                 continue;
